@@ -2,106 +2,168 @@
 
 # KoraSSH
 
-本地优先、跨平台的现代 SSH 服务器监控仪表盘、多标签终端与 SFTP 客户端（桌面端 GUI + 终端版 TUI）
+### 你管理的每一台服务器，都在同一个窗口里。仪表盘、终端、SFTP、命令片段。
 
-<a href="https://github.com/AnonyJcy/korassh">
-  <img src="assets/gui-preview.png" alt="KoraSSH 桌面端预览" width="900">
-</a>
+<img src="assets/gui-preview.png" alt="KoraSSH 桌面端" width="900">
 
-[![Release](https://img.shields.io/github/v/release/AnonyJcy/korassh?color=blue)](https://github.com/AnonyJcy/korassh/releases)
-[![License](https://img.shields.io/badge/license-Apache--2.0-lightgrey.svg)](LICENSE)
-[![Stack](https://img.shields.io/badge/Rust%20%2B%20Tauri%20v2%20%2B%20Svelte%205-orange.svg)]()
-[![Platform](https://img.shields.io/badge/Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Termux-brightgreen)]()
+[![Downloads](https://img.shields.io/github/downloads/AnonyJcy/korassh/total?label=total%20installs&color=2ea44f)](https://github.com/AnonyJcy/korassh/releases)
+[![Latest release](https://img.shields.io/github/v/release/AnonyJcy/korassh?label=latest)](https://github.com/AnonyJcy/korassh/releases/latest)
+[![Stars](https://img.shields.io/github/stars/AnonyJcy/korassh?style=flat)](https://github.com/AnonyJcy/korassh/stargazers)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Build](https://img.shields.io/github/actions/workflow/status/AnonyJcy/korassh/ci.yml?branch=main)](https://github.com/AnonyJcy/korassh/actions)
+
+**[安装](#安装)** •
+**[它能做什么](#它能做什么)** •
+**[SSH 密钥配置](#ssh-密钥配置)** •
+**[终端版](#终端版)** •
+**[常见问题](#常见问题)** •
+**[参与贡献](#参与贡献)**
 
 </div>
 
 ---
 
-## 为什么做 KoraSSH
+## 安装
 
-> 最初衍生自 [OmnySSH](https://github.com/timhartmann7/omnyssh) (Apache-2.0)，现已独立演进维护。
-
-市面上的 SSH 客户端要么动辄几百 MB、带账号登录与云端遥测，要么界面陈旧、缺少顺手的日常交互。KoraSSH 坚持 **~5 MB 轻量体积、纯本地运行、无账号无遥测、只读兼容 `~/.ssh/config`** 的底线，在这个骨架上把主力 SSH 工具真正高频用得上的能力一次性补齐：
-
-- **顺手的终端工作区**：左右/上下分屏、字号滚轮缩放、8 套终端配色、断线一键重连、克隆标签、URL 可点击、底部快捷命令条、关键字高亮、会话日志录制，以及一键打开本机 PowerShell / Bash / Zsh 的本地终端标签。
-- **不仅能传、还能改的 SFTP**：双栏传输（整目录、拖拽、权限保留、取消）之外，支持直接在线编辑远程文本文件（`Ctrl+S` 保存）、目录筛选、隐藏文件开关、权限展示与 `chmod`，还可以在终端右侧直接拉出当前主机的折叠式 SFTP 侧边栏。
-- **不留明文的安全存储与端到端同步**：主机与代理密码默认经 **AES-256-GCM** 自动密文落盘，支持在设置页开启 **Argon2id 主密码锁**；支持 `.korabak` 端到端加密备份导入导出，以及基于 **WebDAV / Git 仓库** 的无账号加密同步。
-- **完整隧道与复杂网络支持**：同时支持本地转发（`-L`）、远程反向转发（`-R`）、动态 SOCKS5 转发（`-D`），以及 `ProxyJump` 跳板机与 **HTTP CONNECT / SOCKS5 前置代理**。
-- **多平台免 Agent 仪表盘**：单窗口监控 Linux、macOS、FreeBSD 与远程 Windows 主机，支持分组、排序、拖拽排版、一键 SSH 密钥配置与安全恢复密码登录，以及录屏/直播隐私模式。
-- **面向中文与 Windows 深度打磨**：简体中文 / English 双语切换、纯简体中文 Windows 安装向导、拦截 WebView2 `F5`/`Ctrl+R` 误刷新丢标签、失败主机一键唤醒重连，以及按需加载华为可商用的 **鸿蒙黑体（HarmonyOS Sans）**（默认系统字体零外网请求）。
-
----
-
-## 下载与安装
-
-### 直接下载（推荐）
-
-前往 [**Releases 页面**](https://github.com/AnonyJcy/korassh/releases) 下载对应平台安装包（所有产物由 GitHub Actions 自动编译并附带 `SHA256SUMS` 校验）：
-
-| 平台 | 桌面端 GUI | 终端版 TUI (`kora`) | 说明 |
-|---|---|---|---|
-| **Windows x86_64** | `KoraSSH-x86_64-setup.exe` / `KoraSSH-x86_64.zip` | `kora-x86_64-pc-windows-msvc.zip` | 安装版为纯简体中文向导；便携版需系统已装 WebView2 Runtime |
-| **macOS (Apple Silicon)** | `KoraSSH-aarch64-apple-darwin.dmg` | `kora-aarch64-apple-darwin.tar.gz` | 适用于 M 系列芯片（首次打开若受拦截需在隐私与安全性中放行） |
-| **macOS (Intel)** | `KoraSSH-x86_64-apple-darwin.dmg` | `kora-x86_64-apple-darwin.tar.gz` | 适用于 Intel 处理器 Mac |
-| **Linux x86_64** | `KoraSSH-x86_64.AppImage` / `.deb` / `.rpm` | `kora-x86_64-unknown-linux-gnu.tar.gz` | 通用桌面包与终端包 |
-| **Linux ARM64 / Termux** | — | `kora-aarch64-unknown-linux-musl.tar.gz` | musl 静态链接，直接运行于 Android Termux 与 ARM64 服务器 |
-
-### 一键安装脚本（Linux / macOS / Git Bash）
+macOS 和 Linux 上一条命令：
 
 ```bash
-# 安装桌面端（ARM64 Linux 或 Termux 会自动回退安装终端版 kora）
 curl -fsSL https://raw.githubusercontent.com/AnonyJcy/korassh/main/install.sh | sh
-
-# 仅安装终端版 kora
-curl -fsSL https://raw.githubusercontent.com/AnonyJcy/korassh/main/install.sh | sh -s -- --tui
-
-# 同时安装桌面端和终端版
-curl -fsSL https://raw.githubusercontent.com/AnonyJcy/korassh/main/install.sh | sh -s -- --both
 ```
 
-### 从源码构建
+脚本会识别系统和架构，装上最新的桌面版：macOS 放进「应用程序」，Linux 进应用菜单。想要终端版，或者两个都要？`curl … | sh -s -- --tui`（或 `--both`）。更喜欢自己点？到 [**Releases**](https://github.com/AnonyJcy/korassh/releases/latest) 取对应平台的文件。
 
-仅构建命令行终端版 `kora`（不依赖 Node.js 与 WebView 环境）：
+| 平台 | 文件 |
+|------|------|
+| macOS Apple Silicon | `KoraSSH-aarch64-apple-darwin.dmg` |
+| macOS Intel | `KoraSSH-x86_64-apple-darwin.dmg` |
+| Linux x86_64 | `KoraSSH-x86_64.AppImage` / `.deb` / `.rpm` |
+| Windows x86_64 | `KoraSSH-x86_64-setup.exe` |
 
-```bash
-cargo build --release --locked
-# 产物位于 target/release/kora
-```
+没有账号，没有登录界面，没有遥测。第一次打开是一个空的仪表盘；如果本机有 `~/.ssh/config`，它会直接读进来，经跳板机（`ProxyJump`）访问的主机也算在内。
 
-桌面端构建步骤可参考 [.github/workflows/release.yml](.github/workflows/release.yml)。
+从 OmnySSH（中文维护版）过来？主机、命令片段和设置会在 KoraSSH 第一次启动时自动带过去，旧目录原样保留。
 
 ---
 
-## 配置目录与从 OmnySSH 平滑迁移
+## 它能做什么
 
-KoraSSH 使用独立的应用标识（`com.anonyjcy.korassh`）与配置目录，不会覆盖或干扰你原有的 OmnySSH 安装：
+主机只添加一次。之后它就待在仪表盘上，一张卡片，带实时的 CPU、内存、磁盘、运行时长、发行版，有吃 CPU 的进程，还有一个说明它在跑什么的服务标记。点一下「终端」就进到真实的 PTY，点一下「SFTP」就打开双栏文件管理器。十台服务器放在同一屏，自己刷新。
 
-- **Windows**：`%APPDATA%\korassh\`
-- **macOS**：`~/Library/Application Support/korassh/`
-- **Linux**：`~/.config/korassh/`
+### 实时仪表盘
 
-**老用户自动迁移**：首次启动 KoraSSH 时，若检测到本机存在旧版 `omnyssh` 配置目录且 `korassh` 目录尚无数据，会自动无损复制 `hosts.toml`、`snippets.toml`、`config.toml`（不修改旧目录），并立即将旧版明文密码升级为 AES-256-GCM 密文存储。
+每台主机一张卡片：CPU、内存、磁盘的占用条，运行时长，系统版本，最占 CPU 的进程，Docker 的标记会写明有几个容器在跑。占用条先变黄，再变红，一台不舒服的服务器隔着房间也看得出来。按标签分组、排序；桌面版还能把卡片拖成自己的顺序。
 
-### 终端版 (`kora`)
+### 终端
 
-![终端版演示](assets/demo.gif)
+完整的 PTY 会话，开成标签页。想开几台就开几台，从侧栏切换，回仪表盘干活的时候它们照样在跑。左右或上下分屏，两台服务器并排看；断线了点一下重连；输出里的链接可以直接点开。
 
-运行 `kora` 后，按 `a` 添加主机、`/` 搜索、`g` 按标签分组、`r` 强制刷新与重连、`Shift+K` 配置 SSH 密钥、`?` 查看帮助，完整文档见 `man kora`。
+### 双栏 SFTP
+
+左边本地，右边远程。勾上要传的文件和目录，拉过去就行；也可以直接从一边拖到另一边，或者从文件管理器拖到服务器上。看着进度条走完，一次选一批，每个文件最后改于什么时候一目了然。远程的文本文件可以在线打开改完再保存回去（`Ctrl+S`），权限列旁边就是 `chmod`。反正也没人记得 `scp -r` 的语法。
+
+### 命令片段
+
+把每周都要敲一遍的命令存起来。选一条，勾上要发往的主机，它会同时在所有主机上运行。片段可以带参数：`sudo systemctl restart {{service}}` 会先问你服务名。终端底下那条可收起的快捷命令栏，一点就把命令发进当前的会话。
+
+### 端口转发与代理
+
+本地转发（`-L`）、远程转发（`-R`）、SOCKS5 代理（`-D`）在主机编辑器里各占一行，卡片上一键开关。主机前面有 HTTP 或 SOCKS5 代理也能配；经跳板机（`ProxyJump`）访问的主机从 `~/.ssh/config` 读进来。
+
+### 密码加密与同步
+
+主机和代理的密码默认以 AES-256-GCM 加密后落盘，磁盘上没有明文。想再加一道锁，就设一个主密码（Argon2id），启动后输入一次。主机、片段和设置可以导出成端到端加密的备份文件带走，也可以放进 WebDAV 或 Git 仓库，在几台电脑之间同步。离开本机的只有密文。
+
+### 全局搜索
+
+⌘K（Windows 和 Linux 上是 Ctrl+K），然后直接打字。你有的每一台主机，加上已经打开的每一个会话。回车就落到所选主机的终端里，或者回到刚才离开的会话。
+
+### 主播模式
+
+把屏幕上所有真实 IP 换成假的。录 demo 或者共享屏幕，不会泄露客户的基础设施。
+
+### 明暗主题，字体随你
+
+两套主题都在，侧栏里切换。界面字体和终端字体各自可换；终端另有 Dracula、Nord、Tokyo Night、Solarized 等七套配色。
+
+### 轻量
+
+终端版 `kora` 是一个 5 MB 左右的静态二进制。桌面版的 dmg、安装程序、deb 和 rpm 在 6 到 8 MB 之间。
+
+---
+
+## SSH 密钥配置
+
+新 VPS 还在用密码登录，是那种你一直想着要改、却从来没改的事。KoraSSH 一次点击搞定。
+
+挑一台你自己添加的、还没配密钥的主机，点**自动配置 SSH 密钥**，它会生成一把 Ed25519 密钥，把公钥追加到 `authorized_keys`，然后把这台主机切换成密钥登录。点下去会先让你确认一次。确认之后，它会用新密钥重新连一次，证明密钥确实能用，然后才关掉密码登录；流程一旦开始就会走完。
+
+碰 `sshd_config` 之前，它会在服务器上留一份备份。任何一步失败，就恢复备份，访问方式原样不动。私钥从不离开你的机器，除了你选的那台服务器，什么也不会发往别处。密码登录关掉以后，卡片上还留着「恢复密码登录」这条路。
+
+代码在 [`crates/korassh-core/src/ssh/key_setup.rs`](crates/korassh-core/src/ssh/key_setup.rs)。把它指向生产环境之前，先读一遍。开源的意义就在这里。
+
+带口令的密钥也能用。密钥是加密的，KoraSSH 会问一次口令，退出之前留在内存里，从不写进磁盘。在 macOS 和 Linux 上，已经加载进 `ssh-agent` 的密钥直接拿来用，不会再问。主机的**密码**栏填的是服务器登录密码，不是密钥口令。
+
+---
+
+## 终端版
+
+KoraSSH 是从终端里长出来的，TUI 还在，还在维护，也照样发版。
+
+![Demo](assets/demo.gif)
+
+底下是同一套引擎：仓库是一个 cargo workspace，`crates/korassh-core` 放逻辑，各个前端建在它上面。仪表盘、SFTP、命令片段、多会话标签（可以分屏）、模糊搜索，四套主题（`default`、`dracula`、`nord`、`gruvbox`），按键可以在 `config.toml` 里改。
+
+```bash
+# Nix（仓库自带 flake.nix）
+nix run github:AnonyJcy/korassh
+
+# cargo，从源码装
+cargo install --git https://github.com/AnonyJcy/korassh korassh
+```
+
+然后运行 `kora`。按 `a` 添加主机，`/` 搜索，`g` 按标签分组，`?` 看帮助，`K` 给选中的主机配置密钥。
+
+Linux、macOS、Windows 和 Termux 的预编译二进制在 [Releases](https://github.com/AnonyJcy/korassh/releases) 页的 `kora-*` 文件里。配置放在 `~/.config/korassh/`（Linux）、`~/Library/Application Support/korassh/`（macOS）、`%APPDATA%\korassh\`（Windows）。`~/.ssh/config` 只在启动时读取，从不写入。
+
+完整的选项、按键和配置示例：`man kora`。
 
 ---
 
 ## 常见问题
 
-- **macOS 连接局域网主机提示 `No route to host`**：前往「系统设置 → 隐私与安全性 → 本地网络」，勾选允许 KoraSSH 后重启。
-- **群晖 Synology NAS 终端输入密码后提示 `Permission denied`**：Synology DSM 默认仅允许 `administrators` 群组账号开启 Shell，普通账号仍可使用 SFTP。
-- **Windows 便携版无法打开窗口**：`KoraSSH-x86_64.zip` 不自带 WebView2 运行时；精简版系统请直接运行 `KoraSSH-x86_64-setup.exe`，安装程序会自动引导补齐运行环境。
+**macOS：局域网里的主机连不上，报 "No route to host"。** macOS 只在得到允许之后才让应用访问局域网设备。到「系统设置 → 隐私与安全性 → 本地网络」把 KoraSSH 打开（已经开着就关了再开），然后重新打开应用。终端版 `kora` 跑在哪个终端应用里，就是那个应用需要这项权限；系统自带的「终端」已经有了。
+
+**群晖：输完密码，终端立刻以 "Permission denied, please try again." 结束。** DSM 只给 administrators 群组的成员开 shell，而且要在「控制面板 → 终端机和 SNMP → 启动 SSH 功能」打开的情况下。其他账号仍然可以用 SFTP。
+
+**Windows：便携版 `KoraSSH-x86_64.zip` 双击没有窗口。** 便携版不带 WebView2 运行时。装 `KoraSSH-x86_64-setup.exe`，安装程序会把它补上。
 
 ---
 
-## 开源协议与致谢
+## 参与贡献
 
-- 本项目最初衍生自 [timhartmann7/omnyssh](https://github.com/timhartmann7/omnyssh)（Apache-2.0），现已独立演进维护，完整保留原始 Git 提交历史与归属声明（详见 [NOTICE](NOTICE)）。
-- 感谢原作者 **Tim Hartmann**（[@timhartmann7](https://github.com/timhartmann7)）打下的底层基础，以及社区 PR 贡献者 [@olcums](https://github.com/olcums)（#138）、[@sachin56](https://github.com/sachin56)（#152）与 [@alez0101](https://github.com/alez0101)（#162）。
-- 源码基于 [Apache License 2.0](LICENSE) 开源；可选按需加载的鸿蒙黑体遵循华为 HarmonyOS Sans Fonts License 协议。
+欢迎提 PR。[CONTRIBUTING.md](CONTRIBUTING.md) 里有环境搭建、约定和检查清单。想做大改动，先开个 issue，免得我们俩各做一遍。
 
-欢迎在 [GitHub Issues](https://github.com/AnonyJcy/korassh/issues) 提交反馈与建议。
+工作区结构：
+
+```
+crates/korassh-core   引擎，不含界面
+crates/korassh        终端版（二进制：kora）
+crates/korassh-gui    Tauri 桌面版
+```
+
+## 协议
+
+Apache 2.0，见 [LICENSE](LICENSE)。
+
+KoraSSH 最初衍生自 [OmnySSH](https://github.com/timhartmann7/omnyssh)（Apache-2.0），现已独立演进维护。原始提交历史与版权声明完整保留，另见 [NOTICE](NOTICE)。
+
+<div align="center">
+
+### ⭐ 如果 KoraSSH 替你省下了一个终端标签，点个 star
+
+[报告问题](https://github.com/AnonyJcy/korassh/issues) •
+[功能建议](https://github.com/AnonyJcy/korassh/issues) •
+[Releases](https://github.com/AnonyJcy/korassh/releases)
+
+</div>
