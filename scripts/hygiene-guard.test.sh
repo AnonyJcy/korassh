@@ -49,7 +49,7 @@ setup_repo
 printf 'X=1\n' >"$repo/.ENV" && git -C "$repo" add -f .ENV && expect_fail "case-variant .ENV"
 
 setup_repo
-: >"$repo/omnyssh.tauri.key" && git -C "$repo" add -f omnyssh.tauri.key && expect_fail "tracked *.tauri.key"
+: >"$repo/korassh.tauri.key" && git -C "$repo" add -f korassh.tauri.key && expect_fail "tracked *.tauri.key"
 
 setup_repo
 printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\nx\n-----END OPENSSH PRIVATE KEY-----\n' >"$repo/id_ed25519"

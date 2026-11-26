@@ -7,6 +7,31 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## 2.0.0 — 2026-11-26
+
+### 品牌独立与全新里程碑（KoraSSH）
+- **正式更名为 KoraSSH 并独立演进**：最初衍生自 OmnySSH (Apache-2.0)，现由 [@AnonyJcy](https://github.com/AnonyJcy) 独立维护与持续开发（仓库迁移至 `AnonyJcy/korassh`，桌面端 `KoraSSH`，终端版 `kora`，包标识 `com.anonyjcy.korassh`）。
+- **全新原创视觉与无痛迁移**：启用全新 KoraSSH 几何矢量 Logo 与全平台高清图标（PNG / ICO / ICNS）；首次启动自动检测旧版 `omnyssh` 配置目录并无损复制 `hosts.toml` / `snippets.toml` / `config.toml` 至 `korassh` 目录，老用户无缝升级。
+- **合规与开源归属**：完整保留上游原作者与所有社区 PR 贡献者的 Git 提交历史，保留 Apache-2.0 协议并新增 [NOTICE](NOTICE) 文件，在 README 与软件「关于」页透明致谢。
+
+### 第一梯队：终端与 SFTP 日常体验全面补齐
+- **终端高度可定制**：支持字号缩放（`Ctrl+滚轮` / `Ctrl+=` / `Ctrl+-` / `Ctrl+0` 及设置页滑块）、行高调节（1.0–1.8）、回滚缓冲行数（最高 50,000 行）、光标样式（实心块 / 下划线 / 竖线）与闪烁开关。
+- **8 套内置终端配色方案**：支持跟随应用浅/深色，以及 Dracula、Nord、One Dark、Tokyo Night、Gruvbox Dark、Solarized Dark / Light，实时生效到所有已开终端。
+- **断线一键重连、克隆标签与 URL 点击**：终端顶部新增紧凑操作栏，支持断线原地重连、克隆当前标签页，以及通过 `@xterm/addon-web-links` 自动识别并点击打开终端输出中的 URL。
+- **终端底部快捷命令条**：可一键展开/收起，直接复用已保存的命令片段，支持实时搜索与 `{{param}}` 参数插值后一键发送到当前终端。
+- **SFTP 在线编辑与文件增强**：支持在线打开远程 UTF-8 文本文件直接编辑并用 `Ctrl+S` 保存写回（保留原权限位并防二进制误开）；新增每栏实时文件名筛选、`.` 隐藏文件开关、POSIX 权限列显示（`rwxr-xr-x`）以及在线修改权限（`chmod`）。
+
+### 第二梯队：核心安全与网络能力扩展
+- **本地凭据加密库 + 可选主密码锁**：默认使用 AES-256-GCM 密文落盘主机与代理密码（`enc:v1:...`），首次加载自动迁移旧版明文 `hosts.toml`，彻底消除磁盘明文密码；设置页支持一键开启/修改/移除 Argon2id 主密码锁与即时锁定。
+- **终端分屏与内嵌 SFTP 侧边栏**：桌面端支持左右分屏 / 上下分屏同时操作多个实时终端（切换分屏不丢会话与回滚历史）；终端右侧支持一键折叠/展开当前主机的 SFTP 文件侧边栏（支持浏览、筛选、新建、删除、`chmod` 与在线文本编辑）。
+- **全能端口转发与前置代理**：在原有本地转发（`-L`）基础上新增**远程反向转发（`-R` / `RemoteForward`）**与**动态 SOCKS5 转发（`-D` / `DynamicForward`）**；新增 SSH 前置 **HTTP CONNECT / SOCKS5 代理**支持（含可选用户名密码认证）。
+
+### 第三梯队：留存与多设备协作
+- **端到端加密备份与 WebDAV / Git 同步**：支持使用口令经 Argon2id + AES-256-GCM 导出/导入 `.korabak` 加密快照（支持合并或覆盖）；内置 WebDAV 与 Git 仓库端到端加密同步，仅密文离开本机。
+- **会话日志录制、关键字高亮与本地终端**：支持一键录制终端输出并剥离 ANSI 转义序列导出为干净 `.log` 文件；内置 `ERROR` / `WARN` / `SUCCESS` 等关键字高亮与自定义正则规则（自动避开 vim/htop 备用屏）；新增跨平台**本地终端（Local Shell）**标签（Windows PowerShell/cmd、Linux/macOS Bash/Zsh），无需 SSH 主机即可在同窗口使用。
+
+---
+
 ## 1.1.10 — 2026-11-26
 
 ### 新增特性与功能改进

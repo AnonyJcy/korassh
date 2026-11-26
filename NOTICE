@@ -1,0 +1,20 @@
+KoraSSH
+Copyright 2026 AnonyJcy (https://github.com/AnonyJcy/korassh)
+
+This product is originally derived from OmnySSH
+(https://github.com/timhartmann7/omnyssh),
+Copyright 2026 OmnySSH contributors,
+licensed under the Apache License, Version 2.0.
+
+KoraSSH is now independently evolved and maintained. All original Git commit
+history, attribution, and Apache License 2.0 terms are preserved verbatim.
+
+Additional community contributions incorporated with attribution:
+- Remote Windows SSH metrics collection (PR #138, @olcums)
+- Terminal scrollback search (PR #152, @sachin56)
+- PuTTY-style terminal copy and paste (PR #162, @alez0101)
+
+Optional on-demand webfont:
+- HarmonyOS Sans is loaded on demand from CDN only when selected by the user
+  and is subject to the HarmonyOS Sans Fonts License Agreement
+  (Copyright Huawei Device Co., Ltd.).

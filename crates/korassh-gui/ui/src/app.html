@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/logo.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      // No-FOUC: paint the persisted theme before first frame. Mirrors the
+      // localStorage copy the theme store keeps; defaults to dark (tech-gui.md §5.1).
+      (function () {
+        try {
+          var t = localStorage.getItem('korassh-theme');
+          document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+        } catch (e) {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+        // No-FOUC: apply persisted UI font preset before first paint (mirrors stores/font.ts).
+        try {
+          var stacks = {
+            system: "system-ui, -apple-system, 'PingFang SC', 'Segoe UI', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif",
+            harmonyos: "'HarmonyOS Sans', 'HarmonyOS Sans SC', 'PingFang SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif",
+            classic: "'Helvetica Neue', Helvetica, Arial, sans-serif"
+          };
+          var rawFont = localStorage.getItem('korassh-font');
+          if (rawFont) {
+            var fp = JSON.parse(rawFont);
+            var preset = fp && typeof fp.ui === 'string' && (stacks[fp.ui] || fp.ui === 'custom') ? fp.ui : 'system';
+            var stack = stacks[preset] || stacks.system;
+            if (preset === 'custom' && fp && typeof fp.uiCustom === 'string') {
+              var cleaned = fp.uiCustom
+                .split(',')
+                .map(function (p) { return p.replace(/[\x00-\x1f\x7f"'\\;{}]/g, '').replace(/\s+/g, ' ').trim(); })
+                .filter(Boolean)
+                .map(function (n) { return "'" + n + "'"; })
+                .join(', ');
+              if (cleaned) stack = cleaned + ', ' + stacks.system;
+            }
+            document.documentElement.setAttribute('data-font', preset);
+            document.documentElement.style.setProperty('--font-sans', stack);
+          } else {
+            document.documentElement.setAttribute('data-font', 'system');
+          }
+        } catch (e) {}
+        // Reserve the overlay title-bar inset only on macOS (--titlebar-h), where the
+        // window uses an overlay title bar with the traffic lights drawn over the app.
+        try {
+          if (/Mac/.test(navigator.userAgent)) {
+            document.documentElement.setAttribute('data-os', 'macos');
+          }
+        } catch (e) {}
+      })();
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

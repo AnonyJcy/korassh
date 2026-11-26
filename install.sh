@@ -1,6 +1,6 @@
 #!/bin/sh
-# OmnySSH installation script
-# Usage: curl -fsSL https://raw.githubusercontent.com/AnonyJcy/omnyssh-cn/zh-cn/install.sh | sh
+# KoraSSH installation script
+# Usage: curl -fsSL https://raw.githubusercontent.com/AnonyJcy/korassh/main/install.sh | sh
 
 set -e
 
@@ -12,8 +12,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # GitHub repository
-REPO="AnonyJcy/omnyssh-cn"
-BINARY_NAME="omny"
+REPO="AnonyJcy/korassh"
+BINARY_NAME="kora"
 
 # Print colored messages
 print_info() {
@@ -262,7 +262,7 @@ install_man_page() {
 
     print_info "Installing man page..."
 
-    MAN_URL="https://raw.githubusercontent.com/$REPO/$VERSION/doc/omny.1"
+    MAN_URL="https://raw.githubusercontent.com/$REPO/$VERSION/doc/kora.1"
     if [ "$IS_TERMUX" = "1" ]; then
         MAN_DIR="$PREFIX/share/man/man1"
     else
@@ -276,16 +276,16 @@ install_man_page() {
 
     # Download to a temp file first — needs no privileges. Placing it into a
     # system man directory may require sudo, mirroring the binary install above.
-    MAN_TMP="$TMP_DIR/omny.1"
+    MAN_TMP="$TMP_DIR/kora.1"
     if ! curl -fsSL "$MAN_URL" -o "$MAN_TMP" 2>/dev/null; then
         print_info "Man page installation skipped (download failed)"
         return
     fi
 
-    if mkdir -p "$MAN_DIR" 2>/dev/null && cp "$MAN_TMP" "$MAN_DIR/omny.1" 2>/dev/null; then
-        print_success "Man page installed. Run 'man omny' for documentation"
-    elif [ "$IS_TERMUX" != "1" ] && sudo mkdir -p "$MAN_DIR" 2>/dev/null && sudo cp "$MAN_TMP" "$MAN_DIR/omny.1" 2>/dev/null; then
-        print_success "Man page installed. Run 'man omny' for documentation"
+    if mkdir -p "$MAN_DIR" 2>/dev/null && cp "$MAN_TMP" "$MAN_DIR/kora.1" 2>/dev/null; then
+        print_success "Man page installed. Run 'man kora' for documentation"
+    elif [ "$IS_TERMUX" != "1" ] && sudo mkdir -p "$MAN_DIR" 2>/dev/null && sudo cp "$MAN_TMP" "$MAN_DIR/kora.1" 2>/dev/null; then
+        print_success "Man page installed. Run 'man kora' for documentation"
     else
         print_info "Man page installation skipped (optional)"
     fi
@@ -334,9 +334,9 @@ install_gui() {
     # Public GUI asset names (match the release table): macOS keeps the full
     # target triple, Linux/Windows are x86_64-only so they use the short arch.
     case "$PLATFORM" in
-        apple-darwin)      GUI_ASSET="OmnySSH-${TARGET}.dmg" ;;
-        unknown-linux-gnu) GUI_ASSET="OmnySSH-${ARCH}.AppImage" ;;
-        pc-windows-msvc)   GUI_ASSET="OmnySSH-${ARCH}-setup.exe" ;;
+        apple-darwin)      GUI_ASSET="KoraSSH-${TARGET}.dmg" ;;
+        unknown-linux-gnu) GUI_ASSET="KoraSSH-${ARCH}.AppImage" ;;
+        pc-windows-msvc)   GUI_ASSET="KoraSSH-${ARCH}-setup.exe" ;;
         *)
             GUI_UNAVAILABLE=1
             print_warning "The desktop GUI is not available for $TARGET."
@@ -356,7 +356,7 @@ install_gui_macos() {
     DMG="$ASSET_PATH"
     print_info "Mounting disk image..."
     # hdiutil prints tab-separated fields, and a volume name already taken is mounted
-    # as "OmnySSH 1" — so anything that stops at the first space picks up whatever the
+    # as "KoraSSH 1" — so anything that stops at the first space picks up whatever the
     # user left mounted and installs that instead. Take the last field of the last row.
     _attach=$(hdiutil attach -nobrowse -readonly "$DMG" 2>/dev/null || true)
     MOUNT=$(printf '%s\n' "$_attach" \
@@ -403,11 +403,11 @@ install_gui_macos() {
 # Removes an AppImage install this script left behind. A native package brings its
 # own binary and menu entry under different names, so an earlier AppImage survives as
 # a second, older launcher — and $INSTALL_DIR precedes /usr/bin on the default PATH,
-# so `omnyssh` on the command line keeps running it.
+# so `korassh` on the command line keeps running it.
 drop_appimage_install() {
-    sudo rm -f "$INSTALL_DIR/omnyssh" 2>/dev/null || true
-    rm -f "$HOME/.local/share/applications/omnyssh.desktop" 2>/dev/null || true
-    rm -f "$HOME/.local/share/icons/omnyssh.png" 2>/dev/null || true
+    sudo rm -f "$INSTALL_DIR/korassh" 2>/dev/null || true
+    rm -f "$HOME/.local/share/applications/korassh.desktop" 2>/dev/null || true
+    rm -f "$HOME/.local/share/icons/korassh.png" 2>/dev/null || true
 }
 
 install_gui_linux() {
@@ -418,11 +418,11 @@ install_gui_linux() {
     _rpm_host=0
     if command -v rpm >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1; then
         _rpm_host=1
-        if download_release_asset "OmnySSH-${ARCH}.rpm"; then
+        if download_release_asset "KoraSSH-${ARCH}.rpm"; then
             print_info "Installing the .rpm package..."
             if sudo dnf install -y "$ASSET_PATH"; then
                 drop_appimage_install
-                print_success "OmnySSH installed. Launch it from your application menu."
+                print_success "KoraSSH installed. Launch it from your application menu."
                 return 0
             fi
         fi
@@ -436,7 +436,7 @@ install_gui_linux() {
     # Never on an RPM host, even one that happens to have dpkg: unpacking a .deb onto
     # an RPM-managed filesystem is worse than the portable AppImage.
     if [ "$_rpm_host" = 0 ] && command -v dpkg >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
-        if download_release_asset "OmnySSH-${ARCH}.deb"; then
+        if download_release_asset "KoraSSH-${ARCH}.deb"; then
             print_info "Installing the .deb package..."
             sudo dpkg -i "$ASSET_PATH" || sudo apt-get install -f -y || true
             # `apt-get install -f` resolves an unsatisfiable dependency by removing the
@@ -450,7 +450,7 @@ install_gui_linux() {
                          "$_pkg" 2>/dev/null || true)
             if [ -n "$_pkg" ] && [ "$_installed" = "installed $_pkg_version" ]; then
                 drop_appimage_install
-                print_success "OmnySSH installed. Launch it from your application menu."
+                print_success "KoraSSH installed. Launch it from your application menu."
                 return 0
             fi
         fi
@@ -461,7 +461,7 @@ install_gui_linux() {
 
     download_release_asset "$GUI_ASSET" || return 1
     APPIMAGE="$ASSET_PATH"
-    TARGET_BIN="$INSTALL_DIR/omnyssh"
+    TARGET_BIN="$INSTALL_DIR/korassh"
     print_info "Installing the AppImage to $TARGET_BIN..."
     # Guarded rather than left to `set -e`: the caller runs this inside an `if`, which
     # suspends errexit, and an AppImage that is not executable installs to silence.
@@ -476,19 +476,19 @@ install_gui_linux() {
     APPS_DIR="$HOME/.local/share/applications"
     ICON_DIR="$HOME/.local/share/icons"
     mkdir -p "$APPS_DIR" "$ICON_DIR"
-    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/crates/omnyssh-gui/icons/128x128.png" \
-        -o "$ICON_DIR/omnyssh.png" 2>/dev/null || true
-    cat > "$APPS_DIR/omnyssh.desktop" <<EOF
+    curl -fsSL "https://raw.githubusercontent.com/$REPO/$VERSION/crates/korassh-gui/icons/128x128.png" \
+        -o "$ICON_DIR/korassh.png" 2>/dev/null || true
+    cat > "$APPS_DIR/korassh.desktop" <<EOF
 [Desktop Entry]
-Name=OmnySSH
+Name=KoraSSH
 Comment=SSH dashboard, terminal, and SFTP file manager
 Exec=$TARGET_BIN
-Icon=omnyssh
+Icon=korassh
 Type=Application
 Categories=Utility;Network;
 Terminal=false
 EOF
-    print_success "OmnySSH installed to $TARGET_BIN and added to your app menu."
+    print_success "KoraSSH installed to $TARGET_BIN and added to your app menu."
     print_info "AppImages need FUSE; if it won't start, install 'libfuse2' or run with --appimage-extract-and-run."
 }
 
@@ -501,29 +501,29 @@ install_gui_windows() {
     else
         "$SETUP" || true
     fi
-    print_info "Follow the installer prompts — OmnySSH will appear in the Start Menu."
+    print_info "Follow the installer prompts — KoraSSH will appear in the Start Menu."
 }
 
 usage() {
     cat <<EOF
-OmnySSH installer
+KoraSSH installer
 
 Usage: install.sh [--gui | --tui | --both]
 
   --gui    Install the desktop GUI app (default)
-  --tui    Install the terminal app 'omny'
+  --tui    Install the terminal app 'kora'
   --both   Install both
 
-Environment: OMNYSSH_INSTALL=gui|tui|both has the same effect.
+Environment: KORASSH_INSTALL=gui|tui|both has the same effect.
 Piped runs (curl | sh) default to --gui; pick another with:
   curl -fsSL .../install.sh | sh -s -- --tui
 EOF
 }
 
-# Decide what to install: CLI flag > OMNYSSH_INSTALL env > interactive prompt >
+# Decide what to install: CLI flag > KORASSH_INSTALL env > interactive prompt >
 # 'gui' default (the flagship app; the TUI has its own cargo/brew/nix channels).
 select_components() {
-    COMPONENTS="${OMNYSSH_INSTALL:-}"
+    COMPONENTS="${KORASSH_INSTALL:-}"
     while [ $# -gt 0 ]; do
         case "$1" in
             --tui) COMPONENTS="tui" ;;
@@ -537,7 +537,7 @@ select_components() {
 
     if [ -z "$COMPONENTS" ]; then
         if [ -t 0 ]; then
-            printf "Install which component? [1] GUI (desktop)  [2] TUI (omny)  [3] Both  (default 1): "
+            printf "Install which component? [1] GUI (desktop)  [2] TUI (kora)  [3] Both  (default 1): "
             read -r _choice
             case "$_choice" in
                 2) COMPONENTS="tui" ;;
@@ -557,7 +557,7 @@ main() {
     echo ""
     echo "╔═══════════════════════════════════════╗"
     echo "║                                       ║"
-    echo "║   OmnySSH Installation Script         ║"
+    echo "║   KoraSSH Installation Script         ║"
     echo "║   SSH Dashboard & Server Manager      ║"
     echo "║                                       ║"
     echo "╚═══════════════════════════════════════╝"
@@ -602,19 +602,19 @@ main() {
     print_success "Installation complete!"
     echo ""
     case "$PLATFORM" in
-        apple-darwin)    CONFIG_DIR="~/Library/Application Support/omnyssh/" ;;
-        pc-windows-msvc) CONFIG_DIR="%APPDATA%\\omnyssh\\" ;;
-        *)               CONFIG_DIR="~/.config/omnyssh/" ;;
+        apple-darwin)    CONFIG_DIR="~/Library/Application Support/korassh/" ;;
+        pc-windows-msvc) CONFIG_DIR="%APPDATA%\\korassh\\" ;;
+        *)               CONFIG_DIR="~/.config/korassh/" ;;
     esac
 
     print_info "Next steps:"
     if [ "$COMPONENTS" != "gui" ]; then
-        print_info "  1. Run 'omny' to start the terminal app"
+        print_info "  1. Run 'kora' to start the terminal app"
         print_info "  2. Configure your servers in $CONFIG_DIR"
-        print_info "  3. Check 'man omny' for documentation (Linux/macOS)"
+        print_info "  3. Check 'man kora' for documentation (Linux/macOS)"
     fi
     if [ "$COMPONENTS" = "gui" ] || [ "$COMPONENTS" = "both" ]; then
-        print_info "  • Launch the OmnySSH desktop app from your applications menu"
+        print_info "  • Launch the KoraSSH desktop app from your applications menu"
     fi
     print_info "  • Visit https://github.com/$REPO for more info"
     echo ""

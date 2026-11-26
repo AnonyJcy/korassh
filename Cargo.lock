@@ -2873,6 +2873,90 @@ dependencies = [
 ]
 
 [[package]]
+name = "korassh"
+version = "2.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "clap_mangen",
+ "crossterm",
+ "dirs 5.0.1",
+ "korassh-core",
+ "ratatui",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "unicode-width 0.2.0",
+ "vt100-omnyssh",
+]
+
+[[package]]
+name = "korassh-core"
+version = "2.0.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "argon2",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dirs 5.0.1",
+ "flate2",
+ "glob",
+ "portable-pty",
+ "rand 0.10.3",
+ "reqwest 0.12.28",
+ "russh",
+ "russh-sftp",
+ "self-replace",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "vt100-omnyssh",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
+name = "korassh-gui"
+version = "2.0.0"
+dependencies = [
+ "chrono",
+ "dirs 5.0.1",
+ "gtk",
+ "korassh-core",
+ "libc",
+ "proptest",
+ "serde",
+ "serde_json",
+ "specta",
+ "specta-typescript",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-store",
+ "tauri-plugin-updater",
+ "tauri-plugin-window-state",
+ "tauri-specta",
+ "tempfile",
+ "tokio",
+ "webkit2gtk",
+ "x11-dl",
+ "zbus",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3468,89 +3552,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
-]
-
-[[package]]
-name = "omnyssh"
-version = "1.1.10"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "clap_mangen",
- "crossterm",
- "dirs 5.0.1",
- "omnyssh-core",
- "ratatui",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "unicode-width 0.2.0",
- "vt100-omnyssh",
-]
-
-[[package]]
-name = "omnyssh-core"
-version = "1.1.10"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "argon2",
- "async-trait",
- "base64 0.22.1",
- "chrono",
- "dirs 5.0.1",
- "flate2",
- "glob",
- "portable-pty",
- "rand 0.10.3",
- "reqwest 0.12.28",
- "russh",
- "russh-sftp",
- "self-replace",
- "semver",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tar",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "vt100-omnyssh",
- "windows-sys 0.61.2",
- "zeroize",
-]
-
-[[package]]
-name = "omnyssh-gui"
-version = "1.1.10"
-dependencies = [
- "chrono",
- "dirs 5.0.1",
- "gtk",
- "libc",
- "omnyssh-core",
- "proptest",
- "serde",
- "serde_json",
- "specta",
- "specta-typescript",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tauri-plugin-store",
- "tauri-plugin-updater",
- "tauri-plugin-window-state",
- "tauri-specta",
- "tokio",
- "webkit2gtk",
- "x11-dl",
- "zbus",
 ]
 
 [[package]]

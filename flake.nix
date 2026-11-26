@@ -1,5 +1,5 @@
 {
-  description = "OmnySSH — TUI SSH dashboard & server manager";
+  description = "KoraSSH — TUI SSH dashboard & server manager";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -21,7 +21,7 @@
         craneLib = crane.mkLib pkgs;
 
         workspaceToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-        crateToml = builtins.fromTOML (builtins.readFile ./crates/omnyssh/Cargo.toml);
+        crateToml = builtins.fromTOML (builtins.readFile ./crates/korassh/Cargo.toml);
 
         workspacePackage = workspaceToml.workspace.package;
         cratePackage = crateToml.package;
@@ -38,7 +38,7 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        omnyssh = craneLib.buildPackage (
+        korassh = craneLib.buildPackage (
           commonArgs
           // {
             inherit cargoArtifacts;
@@ -49,30 +49,30 @@
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.installShellFiles ];
 
             postInstall = ''
-              installManPage doc/omny.1
+              installManPage doc/kora.1
             '';
 
             meta = with pkgs.lib; {
               inherit (cratePackage) description;
               homepage = workspacePackage.repository;
               license = licenses.asl20;
-              mainProgram = "omny";
+              mainProgram = "kora";
             };
           }
         );
       in
       {
         checks = {
-          inherit omnyssh;
-          omnyssh-fmt = craneLib.cargoFmt { inherit pname version src; };
-          omnyssh-clippy = craneLib.cargoClippy (
+          inherit korassh;
+          korassh-fmt = craneLib.cargoFmt { inherit pname version src; };
+          korassh-clippy = craneLib.cargoClippy (
             commonArgs
             // {
               inherit cargoArtifacts;
               cargoClippyExtraArgs = "--workspace --all-targets -- --deny warnings";
             }
           );
-          omnyssh-test = craneLib.cargoTest (
+          korassh-test = craneLib.cargoTest (
             commonArgs
             // {
               inherit cargoArtifacts;
@@ -82,14 +82,14 @@
         };
 
         packages = {
-          default = omnyssh;
-          inherit omnyssh;
+          default = korassh;
+          inherit korassh;
         };
 
         apps.default = {
           type = "app";
-          program = "${omnyssh}/bin/omny";
-          inherit (omnyssh) meta;
+          program = "${korassh}/bin/kora";
+          inherit (korassh) meta;
         };
 
         devShells.default = craneLib.devShell {
