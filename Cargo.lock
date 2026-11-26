@@ -3529,6 +3529,7 @@ name = "omnyssh-gui"
 version = "1.1.10"
 dependencies = [
  "chrono",
+ "dirs 5.0.1",
  "gtk",
  "libc",
  "omnyssh-core",

@@ -123,6 +123,18 @@ async terminalOpen(hostName: string, cols: number, rows: number, onOutput: TAURI
 }
 },
 /**
+ * Open a local shell PTY (PowerShell / Bash / Zsh) without an SSH connection,
+ * streaming raw bytes into `on_output` and sharing write/resize/close commands.
+ */
+async terminalOpenLocal(cols: number, rows: number, onOutput: TAURI_CHANNEL<TerminalBytes>) : Promise<Result<number, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("terminal_open_local", { cols, rows, onOutput }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Send keystrokes / pasted bytes to a terminal (tech-gui.md §4.2). Input is
  * low-volume, so the ordinary `number[]` path is fine here (only output is raw).
  */
@@ -292,6 +304,39 @@ async sftpPreview(sessionId: number, path: string) : Promise<Result<null, Comman
 }
 },
 /**
+ * Read a remote UTF-8 text file in full for inline editing; arrives as `file-content-ready`.
+ */
+async sftpReadFile(sessionId: number, path: string) : Promise<Result<null, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sftp_read_file", { sessionId, path }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Write edited UTF-8 text back to a remote file; completion arrives as `sftp-op-done`.
+ */
+async sftpWriteFile(sessionId: number, path: string, content: string) : Promise<Result<null, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sftp_write_file", { sessionId, path, content }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Change POSIX permissions (lower 12 bits, e.g. `0o755`) on a remote path; arrives as `sftp-op-done`.
+ */
+async sftpChmod(sessionId: number, path: string, mode: number) : Promise<Result<null, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sftp_chmod", { sessionId, path, mode }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
  * Cancel the transfer this session is running (tech-gui.md §4.2). It stops at its
  * next step, and its `sftp-op-done` says it was cancelled.
  */
@@ -309,6 +354,19 @@ async sftpCancel(sessionId: number) : Promise<Result<null, CommandError>> {
 async sftpClose(sessionId: number) : Promise<Result<null, CommandError>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("sftp_close", { sessionId }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Save a UTF-8 text file (such as a recorded terminal log or encrypted backup)
+ * into the user's Downloads or Documents directory (or a caller-supplied path).
+ * Returns the written absolute file path.
+ */
+async saveTextFile(fileName: string, content: string) : Promise<Result<string, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_text_file", { fileName, content }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
@@ -498,6 +556,117 @@ async saveUpdateConfig(config: UpdateConfigDto) : Promise<Result<null, CommandEr
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };
 }
+},
+/**
+ * Return the current vault protection mode and unlock state.
+ */
+async vaultStatus() : Promise<VaultStatusDto> {
+    return await TAURI_INVOKE("vault_status");
+},
+/**
+ * Unlock a master-password-protected vault into memory.
+ */
+async vaultUnlock(masterPassword: string) : Promise<Result<VaultStatusDto, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_unlock", { masterPassword }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Clear the decrypted key from memory (locks a master-password vault).
+ */
+async vaultLock() : Promise<VaultStatusDto> {
+    return await TAURI_INVOKE("vault_lock");
+},
+/**
+ * Enable or change the master password (Argon2id + AES-256-GCM key wrapping).
+ */
+async vaultSetMasterPassword(currentPassword: string | null, newPassword: string) : Promise<Result<VaultStatusDto, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_set_master_password", { currentPassword, newPassword }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Verify the current master password and return the vault to seamless Auto encryption mode.
+ */
+async vaultRemoveMasterPassword(currentPassword: string) : Promise<Result<VaultStatusDto, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("vault_remove_master_password", { currentPassword }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Export hosts, snippets, and app config into a passphrase-encrypted `.korabak` JSON string.
+ */
+async exportBackup(passphrase: string) : Promise<Result<string, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("export_backup", { passphrase }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Decrypt and import an encrypted `.korabak` JSON bundle (merge or replace).
+ */
+async importBackup(bundleJson: string, passphrase: string, replace: boolean) : Promise<Result<ImportSummaryDto, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("import_backup", { bundleJson, passphrase, replace }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Load persisted WebDAV / Git sync configuration (WebDAV password omitted).
+ */
+async loadSyncConfig() : Promise<Result<SyncConfigDto, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("load_sync_config") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Persist WebDAV / Git sync configuration, preserving the stored WebDAV password when omitted.
+ */
+async saveSyncConfig(input: SyncConfigInputDto) : Promise<Result<SyncConfigDto, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("save_sync_config", { input }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Encrypt and push the current snapshot to the configured WebDAV or Git remote.
+ */
+async syncPush(passphrase: string) : Promise<Result<string, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sync_push", { passphrase }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+/**
+ * Pull and decrypt the latest snapshot from the configured WebDAV or Git remote.
+ */
+async syncPull(passphrase: string, replace: boolean) : Promise<Result<ImportSummaryDto, CommandError>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("sync_pull", { passphrase, replace }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
 }
 }
 
@@ -506,6 +675,7 @@ async saveUpdateConfig(config: UpdateConfigDto) : Promise<Result<null, CommandEr
 
 export const events = __makeEvents__<{
 error: Error,
+fileContentReady: FileContentReady,
 filePreview: FilePreview,
 hostStatusChanged: HostStatusChanged,
 hostsLoaded: HostsLoaded,
@@ -529,6 +699,7 @@ tunnelStatusChanged: TunnelStatusChanged,
 updateAvailable: UpdateAvailable
 }>({
 error: "error",
+fileContentReady: "file-content-ready",
 filePreview: "file-preview",
 hostStatusChanged: "host-status-changed",
 hostsLoaded: "hosts-loaded",
@@ -565,15 +736,23 @@ export type CommandError = { message: string }
  */
 export type ConnectionStatusDto = { kind: "unknown" } | { kind: "connecting" } | { kind: "connected" } | { kind: "failed"; message: string }
 /**
+ * One `ssh -D` dynamic SOCKS5 forward rule.
+ */
+export type DynamicForwardDto = { bindAddress?: string | null; bindPort: number }
+/**
  * A background error surfaced to the user.
  */
 export type Error = { message: string }
+/**
+ * Full UTF-8 remote text file content ready for inline editing (or an error).
+ */
+export type FileContentReady = { sessionId: number; path: string; content: string | null; error: string | null }
 /**
  * A file or directory in an SFTP panel listing (tech-gui.md §4.1). Maps from the
  * core `FileEntry`; `path` is the absolute path the frontend marks entries by.
  * `modified` is Unix seconds, `null` when unknown.
  */
-export type FileEntryDto = { name: string; path: string; size: number; isDir: boolean; modified: number | null }
+export type FileEntryDto = { name: string; path: string; size: number; isDir: boolean; modified: number | null; permissions?: number | null }
 /**
  * Preview bytes for a remote file (tech-gui.md §4.3). Stamped with `sessionId`; the
  * core `FilePreviewReady` carries only the path + content (§3.4).
@@ -584,7 +763,7 @@ export type FilePreview = { sessionId: number; path: string; content: string }
  * (tech-gui.md §3.4). `hasKey` reports whether an identity file is configured;
  * the key path itself never crosses the boundary.
  */
-export type HostDto = { name: string; hostname: string; user: string; port: number; tags: string[]; notes?: string | null; source: HostSourceDto; hasKey: boolean; passwordAuthDisabled?: boolean | null; monitoring: MonitorModeDto; monitorPort?: number | null; localForwards: LocalForwardDto[]; tunnelAutostart: boolean; forwardAgent: boolean }
+export type HostDto = { name: string; hostname: string; user: string; port: number; tags: string[]; notes?: string | null; source: HostSourceDto; hasKey: boolean; passwordAuthDisabled?: boolean | null; monitoring: MonitorModeDto; monitorPort?: number | null; localForwards: LocalForwardDto[]; remoteForwards: RemoteForwardDto[]; dynamicForwards: DynamicForwardDto[]; proxy?: ProxyConfigDto | null; tunnelAutostart: boolean; forwardAgent: boolean }
 /**
  * Inbound host form payload for `save_host` (tech-gui.md §4.1, Stage 4.1). Always
  * builds a **manual** `Host`: editing an SSH-config import saves a copy that shadows
@@ -593,7 +772,7 @@ export type HostDto = { name: string; hostname: string; user: string; port: numb
  * travel back out: the outbound `HostDto` omits both (§3.4). Inbound only, so it
  * derives `Deserialize` (not `Serialize`).
  */
-export type HostInputDto = { name: string; hostname: string; user: string; port: number; identityFile?: string | null; password?: string | null; proxyJump?: string | null; tags: string[]; notes?: string | null; monitoring?: MonitorModeDto | null; monitorPort?: number | null; localForwards: LocalForwardDto[]; tunnelAutostart: boolean; forwardAgent: boolean }
+export type HostInputDto = { name: string; hostname: string; user: string; port: number; identityFile?: string | null; password?: string | null; proxyJump?: string | null; tags: string[]; notes?: string | null; monitoring?: MonitorModeDto | null; monitorPort?: number | null; localForwards: LocalForwardDto[]; remoteForwards?: RemoteForwardDto[]; dynamicForwards?: DynamicForwardDto[]; proxy?: ProxyInputDto | null; tunnelAutostart: boolean; forwardAgent: boolean }
 /**
  * Host origin, mirrors `omnyssh_core::ssh::client::HostSource`.
  */
@@ -607,6 +786,10 @@ export type HostStatusChanged = { hostName: string; status: ConnectionStatusDto 
  * cache; the bridge does not map `HostsLoaded` (tech-gui.md §3.4).
  */
 export type HostsLoaded = HostDto[]
+/**
+ * Summary of an encrypted backup import or remote sync pull.
+ */
+export type ImportSummaryDto = { hostsImported: number; snippetsImported: number }
 /**
  * A private key is encrypted and no passphrase is cached yet. Frontends prompt
  * once per key path; the passphrase never crosses back out of the backend.
@@ -671,6 +854,22 @@ export type PasswordRequired = { requestId: number; hostName: string; login: str
  * A single process in the "top processes" panel (tech-gui.md §4.1).
  */
 export type ProcessDto = { name: string; cpuPercent: number; memPercent: number }
+/**
+ * Outbound proxy metadata on `HostDto` — omits password (reports `hasAuth` instead).
+ */
+export type ProxyConfigDto = { kind: ProxyKindDto; host: string; port: number; username?: string | null; hasAuth: boolean }
+/**
+ * Inbound proxy payload on `HostInputDto`.
+ */
+export type ProxyInputDto = { kind: ProxyKindDto; host: string; port: number; username?: string | null; password?: string | null }
+/**
+ * Upstream SSH proxy protocol.
+ */
+export type ProxyKindDto = "http" | "socks5"
+/**
+ * One `ssh -R` reverse forward rule.
+ */
+export type RemoteForwardDto = { bindAddress?: string | null; remotePort: number; localHost: string; localPort: number }
 /**
  * A service detected on a host with its quick-scan metrics (tech-gui.md §4.1).
  */
@@ -737,6 +936,18 @@ export type SnippetResult = { hostName: string; snippetName: string; ok: boolean
  */
 export type SnippetScopeDto = "global" | "host"
 /**
+ * Outbound sync settings (omits WebDAV password; reports `hasWebdavAuth`).
+ */
+export type SyncConfigDto = { provider: SyncProviderDto; webdavUrl: string; webdavUsername: string; hasWebdavAuth: boolean; webdavRemotePath: string; gitRepoDir: string; gitRemote: string; gitBranch: string; gitFileName: string }
+/**
+ * Inbound sync settings payload.
+ */
+export type SyncConfigInputDto = { provider: SyncProviderDto; webdavUrl: string; webdavUsername: string; webdavPassword?: string | null; webdavRemotePath: string; gitRepoDir: string; gitRemote: string; gitBranch: string; gitFileName: string }
+/**
+ * Sync backend selection exposed to the frontend.
+ */
+export type SyncProviderDto = "none" | "webDav" | "git"
+/**
  * Raw PTY output bytes for a terminal session's per-session `Channel` (tech-gui.md
  * §3.3/§3.6). Deliberately **not** `Serialize`: that dodges the blanket
  * `Serialize -> IpcResponse` mapping (which would JSON-encode to a slow `number[]`),
@@ -795,6 +1006,14 @@ export type UpdateConfigDto = { checkOnStartup: boolean; skipVersion: string }
  * none is invented (§4.1).
  */
 export type UpdateInfoDto = { version: string; url: string; tag: string; canSelfUpdate: boolean }
+/**
+ * Vault protection mode exposed to the frontend.
+ */
+export type VaultModeDto = "auto" | "masterPassword"
+/**
+ * Vault status snapshot exposed to the frontend.
+ */
+export type VaultStatusDto = { mode: VaultModeDto; unlocked: boolean }
 
 /** tauri-specta globals **/
 

@@ -29,6 +29,21 @@ pub async fn terminal_open(
         .map_err(|message| CommandError { message })
 }
 
+/// Open a local shell PTY (PowerShell / Bash / Zsh) without an SSH connection,
+/// streaming raw bytes into `on_output` and sharing write/resize/close commands.
+#[tauri::command]
+#[specta::specta]
+pub async fn terminal_open_local(
+    state: State<'_, GuiState>,
+    cols: u16,
+    rows: u16,
+    on_output: Channel<TerminalBytes>,
+) -> Result<u64, CommandError> {
+    state
+        .open_local_terminal(cols, rows, on_output)
+        .map_err(|message| CommandError { message })
+}
+
 /// Send keystrokes / pasted bytes to a terminal (tech-gui.md §4.2). Input is
 /// low-volume, so the ordinary `number[]` path is fine here (only output is raw).
 #[tauri::command]

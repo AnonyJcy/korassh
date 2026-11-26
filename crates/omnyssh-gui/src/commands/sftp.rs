@@ -168,6 +168,87 @@ pub fn sftp_preview(
     Ok(())
 }
 
+/// Read a remote UTF-8 text file in full for inline editing; arrives as `file-content-ready`.
+#[tauri::command]
+#[specta::specta]
+pub fn sftp_read_file(
+    state: State<'_, GuiState>,
+    session_id: u64,
+    path: String,
+) -> Result<(), CommandError> {
+    state.send_sftp(
+        session_id,
+        SftpCommand::ReadFile {
+            path,
+            max_bytes: omnyssh_core::ssh::sftp::MAX_EDIT_FILE_BYTES,
+        },
+    );
+    Ok(())
+}
+
+/// Write edited UTF-8 text back to a remote file; completion arrives as `sftp-op-done`.
+#[tauri::command]
+#[specta::specta]
+pub fn sftp_write_file(
+    state: State<'_, GuiState>,
+    session_id: u64,
+    path: String,
+    content: String,
+) -> Result<(), CommandError> {
+    state.send_sftp(session_id, SftpCommand::WriteFile { path, content });
+    Ok(())
+}
+
+/// Change POSIX permissions (lower 12 bits, e.g. `0o755`) on a remote path; arrives as `sftp-op-done`.
+#[tauri::command]
+#[specta::specta]
+pub fn sftp_chmod(
+    state: State<'_, GuiState>,
+    session_id: u64,
+    path: String,
+    mode: u32,
+) -> Result<(), CommandError> {
+    state.send_sftp(session_id, SftpCommand::Chmod { path, mode });
+    Ok(())
+}
+
+/// Save a UTF-8 text file (such as a recorded terminal log or encrypted backup)
+/// into the user's Downloads or Documents directory (or a caller-supplied path).
+/// Returns the written absolute file path.
+#[tauri::command]
+#[specta::specta]
+pub async fn save_text_file(file_name: String, content: String) -> Result<String, CommandError> {
+    let base = dirs::download_dir()
+        .or_else(dirs::desktop_dir)
+        .or_else(dirs::home_dir)
+        .ok_or_else(|| CommandError {
+            message: "cannot resolve a writable local directory".to_string(),
+        })?;
+    let safe_name: String = file_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._- ".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe_name = safe_name.trim().trim_start_matches('.');
+    let safe_name = if safe_name.is_empty() {
+        "export.txt"
+    } else {
+        safe_name
+    };
+    let target = base.join(safe_name);
+    tokio::fs::write(&target, content.as_bytes())
+        .await
+        .map_err(|e| CommandError {
+            message: format!("failed to save {}: {e}", target.display()),
+        })?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
 /// Cancel the transfer this session is running (tech-gui.md §4.2). It stops at its
 /// next step, and its `sftp-op-done` says it was cancelled.
 #[tauri::command]

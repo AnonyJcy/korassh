@@ -227,7 +227,7 @@ impl GuiState {
         let host = self
             .host_by_name(name)
             .ok_or_else(|| format!("unknown host '{name}'"))?;
-        if host.local_forwards.is_empty() {
+        if !host.has_tunnels() {
             return Err(format!("'{name}' has no port forwards"));
         }
         self.tunnels
@@ -338,6 +338,31 @@ impl GuiState {
             .lock()
             .expect("pty lock poisoned")
             .open(&host, cols, rows, self.engine_tx.clone())
+            .map_err(|e| e.to_string())?;
+        self.term_channels
+            .lock()
+            .expect("term_channels lock poisoned")
+            .insert(inner, channel);
+        Ok(self
+            .sessions
+            .lock()
+            .expect("sessions lock poisoned")
+            .register_terminal(inner))
+    }
+
+    /// Opens a local shell PTY (PowerShell / Bash / Zsh) on the same session registry
+    /// and raw-output channel contract as remote SSH terminals.
+    pub fn open_local_terminal(
+        &self,
+        cols: u16,
+        rows: u16,
+        channel: Channel<TerminalBytes>,
+    ) -> Result<SessionId, String> {
+        let inner = self
+            .pty
+            .lock()
+            .expect("pty lock poisoned")
+            .open_local(cols, rows, self.engine_tx.clone())
             .map_err(|e| e.to_string())?;
         self.term_channels
             .lock()

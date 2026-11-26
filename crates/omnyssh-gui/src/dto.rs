@@ -6,13 +6,16 @@ use serde::{Deserialize, Serialize};
 
 use omnyssh_core::config::app_config::UpdateConfig;
 use omnyssh_core::config::snippets::{Snippet, SnippetScope};
+use omnyssh_core::config::sync::{ImportSummary, SyncConfig, SyncProvider};
+use omnyssh_core::config::vault::{VaultMode, VaultStatus};
 use omnyssh_core::event::{
     DetectedService, MetricValue, Metrics, ProcessInfo, ServiceKind, ServiceMetric,
 };
 use omnyssh_core::ssh::client::{ConnectionStatus, Host, HostSource, MonitorMode};
 use omnyssh_core::ssh::key_setup::KeySetupStep;
+use omnyssh_core::ssh::proxy::{ProxyConfig, ProxyKind};
 use omnyssh_core::ssh::sftp::FileEntry;
-use omnyssh_core::ssh::tunnel::{LocalForward, TunnelStatus};
+use omnyssh_core::ssh::tunnel::{DynamicForward, LocalForward, RemoteForward, TunnelStatus};
 use omnyssh_core::update::UpdateInfo;
 
 /// Host origin, mirrors `omnyssh_core::ssh::client::HostSource`.
@@ -71,6 +74,12 @@ pub struct HostDto {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitor_port: Option<u16>,
     pub local_forwards: Vec<LocalForwardDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_forwards: Vec<RemoteForwardDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dynamic_forwards: Vec<DynamicForwardDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfigDto>,
     pub tunnel_autostart: bool,
     pub forward_agent: bool,
 }
@@ -86,6 +95,123 @@ pub struct LocalForwardDto {
     pub bind_port: u16,
     pub remote_host: String,
     pub remote_port: u16,
+}
+
+/// One `ssh -R` reverse forward rule.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteForwardDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_address: Option<String>,
+    pub remote_port: u16,
+    pub local_host: String,
+    pub local_port: u16,
+}
+
+/// One `ssh -D` dynamic SOCKS5 forward rule.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicForwardDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_address: Option<String>,
+    pub bind_port: u16,
+}
+
+/// Upstream SSH proxy protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ProxyKindDto {
+    Http,
+    Socks5,
+}
+
+/// Outbound proxy metadata on `HostDto` — omits password (reports `hasAuth` instead).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyConfigDto {
+    pub kind: ProxyKindDto,
+    pub host: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    pub has_auth: bool,
+}
+
+/// Inbound proxy payload on `HostInputDto`.
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyInputDto {
+    pub kind: ProxyKindDto,
+    pub host: String,
+    pub port: u16,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// Vault protection mode exposed to the frontend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum VaultModeDto {
+    Auto,
+    MasterPassword,
+}
+
+/// Vault status snapshot exposed to the frontend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultStatusDto {
+    pub mode: VaultModeDto,
+    pub unlocked: bool,
+}
+
+/// Sync backend selection exposed to the frontend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncProviderDto {
+    None,
+    WebDav,
+    Git,
+}
+
+/// Outbound sync settings (omits WebDAV password; reports `hasWebdavAuth`).
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConfigDto {
+    pub provider: SyncProviderDto,
+    pub webdav_url: String,
+    pub webdav_username: String,
+    pub has_webdav_auth: bool,
+    pub webdav_remote_path: String,
+    pub git_repo_dir: String,
+    pub git_remote: String,
+    pub git_branch: String,
+    pub git_file_name: String,
+}
+
+/// Inbound sync settings payload.
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncConfigInputDto {
+    pub provider: SyncProviderDto,
+    pub webdav_url: String,
+    pub webdav_username: String,
+    #[serde(default)]
+    pub webdav_password: Option<String>,
+    pub webdav_remote_path: String,
+    pub git_repo_dir: String,
+    pub git_remote: String,
+    pub git_branch: String,
+    pub git_file_name: String,
+}
+
+/// Summary of an encrypted backup import or remote sync pull.
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSummaryDto {
+    pub hosts_imported: u32,
+    pub snippets_imported: u32,
 }
 
 /// Where a host's tunnel stands (tech-gui.md §4.1). Internally tagged on `kind`,
@@ -129,6 +255,12 @@ pub struct HostInputDto {
     #[serde(default)]
     pub monitor_port: Option<u16>,
     pub local_forwards: Vec<LocalForwardDto>,
+    #[serde(default)]
+    pub remote_forwards: Vec<RemoteForwardDto>,
+    #[serde(default)]
+    pub dynamic_forwards: Vec<DynamicForwardDto>,
+    #[serde(default)]
+    pub proxy: Option<ProxyInputDto>,
     pub tunnel_autostart: bool,
     pub forward_agent: bool,
 }
@@ -252,6 +384,8 @@ pub struct FileEntryDto {
     pub size: u64,
     pub is_dir: bool,
     pub modified: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<u32>,
 }
 
 /// Live progress for one SFTP upload/download (tech-gui.md §4.1). The GUI allocates
@@ -339,6 +473,9 @@ impl From<&Host> for HostDto {
             monitoring: host.monitoring.into(),
             monitor_port: host.monitor_port,
             local_forwards: host.local_forwards.iter().map(Into::into).collect(),
+            remote_forwards: host.remote_forwards.iter().map(Into::into).collect(),
+            dynamic_forwards: host.dynamic_forwards.iter().map(Into::into).collect(),
+            proxy: host.proxy.as_ref().map(Into::into),
             tunnel_autostart: host.tunnel_autostart,
             forward_agent: host.forward_agent,
         }
@@ -367,6 +504,149 @@ impl From<LocalForwardDto> for LocalForward {
     }
 }
 
+impl From<&RemoteForward> for RemoteForwardDto {
+    fn from(forward: &RemoteForward) -> Self {
+        Self {
+            bind_address: forward.bind_address.clone(),
+            remote_port: forward.remote_port,
+            local_host: forward.local_host.clone(),
+            local_port: forward.local_port,
+        }
+    }
+}
+
+impl From<RemoteForwardDto> for RemoteForward {
+    fn from(dto: RemoteForwardDto) -> Self {
+        Self {
+            bind_address: dto.bind_address,
+            remote_port: dto.remote_port,
+            local_host: dto.local_host,
+            local_port: dto.local_port,
+        }
+    }
+}
+
+impl From<&DynamicForward> for DynamicForwardDto {
+    fn from(forward: &DynamicForward) -> Self {
+        Self {
+            bind_address: forward.bind_address.clone(),
+            bind_port: forward.bind_port,
+        }
+    }
+}
+
+impl From<DynamicForwardDto> for DynamicForward {
+    fn from(dto: DynamicForwardDto) -> Self {
+        Self {
+            bind_address: dto.bind_address,
+            bind_port: dto.bind_port,
+        }
+    }
+}
+
+impl From<ProxyKind> for ProxyKindDto {
+    fn from(kind: ProxyKind) -> Self {
+        match kind {
+            ProxyKind::Http => Self::Http,
+            ProxyKind::Socks5 => Self::Socks5,
+        }
+    }
+}
+
+impl From<ProxyKindDto> for ProxyKind {
+    fn from(kind: ProxyKindDto) -> Self {
+        match kind {
+            ProxyKindDto::Http => Self::Http,
+            ProxyKindDto::Socks5 => Self::Socks5,
+        }
+    }
+}
+
+impl From<&ProxyConfig> for ProxyConfigDto {
+    fn from(proxy: &ProxyConfig) -> Self {
+        Self {
+            kind: proxy.kind.into(),
+            host: proxy.host.clone(),
+            port: proxy.port,
+            username: proxy.username.clone(),
+            has_auth: proxy.password.as_deref().is_some_and(|p| !p.is_empty()),
+        }
+    }
+}
+
+impl From<ProxyInputDto> for ProxyConfig {
+    fn from(dto: ProxyInputDto) -> Self {
+        let non_empty = |s: Option<String>| s.filter(|v| !v.is_empty());
+        Self {
+            kind: dto.kind.into(),
+            host: dto.host.trim().to_string(),
+            port: dto.port,
+            username: non_empty(dto.username),
+            password: non_empty(dto.password),
+        }
+    }
+}
+
+impl From<VaultStatus> for VaultStatusDto {
+    fn from(status: VaultStatus) -> Self {
+        Self {
+            mode: match status.mode {
+                VaultMode::Auto => VaultModeDto::Auto,
+                VaultMode::MasterPassword => VaultModeDto::MasterPassword,
+            },
+            unlocked: status.unlocked,
+        }
+    }
+}
+
+impl From<SyncProvider> for SyncProviderDto {
+    fn from(p: SyncProvider) -> Self {
+        match p {
+            SyncProvider::None => Self::None,
+            SyncProvider::WebDav => Self::WebDav,
+            SyncProvider::Git => Self::Git,
+        }
+    }
+}
+
+impl From<SyncProviderDto> for SyncProvider {
+    fn from(p: SyncProviderDto) -> Self {
+        match p {
+            SyncProviderDto::None => Self::None,
+            SyncProviderDto::WebDav => Self::WebDav,
+            SyncProviderDto::Git => Self::Git,
+        }
+    }
+}
+
+impl From<&SyncConfig> for SyncConfigDto {
+    fn from(cfg: &SyncConfig) -> Self {
+        Self {
+            provider: cfg.provider.into(),
+            webdav_url: cfg.webdav_url.clone(),
+            webdav_username: cfg.webdav_username.clone(),
+            has_webdav_auth: cfg
+                .webdav_password
+                .as_deref()
+                .is_some_and(|p| !p.is_empty()),
+            webdav_remote_path: cfg.webdav_remote_path.clone(),
+            git_repo_dir: cfg.git_repo_dir.clone(),
+            git_remote: cfg.git_remote.clone(),
+            git_branch: cfg.git_branch.clone(),
+            git_file_name: cfg.git_file_name.clone(),
+        }
+    }
+}
+
+impl From<ImportSummary> for ImportSummaryDto {
+    fn from(s: ImportSummary) -> Self {
+        Self {
+            hosts_imported: s.hosts_imported as u32,
+            snippets_imported: s.snippets_imported as u32,
+        }
+    }
+}
+
 /// Rejects a rule `hosts.toml` could not read back. Rules are stored in the `ssh -L`
 /// notation, so one that does not survive it — a zero port, an empty host — would be
 /// saved, then dropped with a warning on the next load.
@@ -375,6 +655,26 @@ pub fn check_forwards(forwards: &[LocalForwardDto]) -> Result<(), String> {
         let forward = LocalForward::from(dto.clone());
         if forward.to_string().parse::<LocalForward>().as_ref() != Ok(&forward) {
             return Err(format!("'{forward}' is not a valid port forward"));
+        }
+    }
+    Ok(())
+}
+
+pub fn check_remote_forwards(forwards: &[RemoteForwardDto]) -> Result<(), String> {
+    for dto in forwards {
+        let forward = RemoteForward::from(dto.clone());
+        if forward.to_string().parse::<RemoteForward>().as_ref() != Ok(&forward) {
+            return Err(format!("'{forward}' is not a valid remote forward"));
+        }
+    }
+    Ok(())
+}
+
+pub fn check_dynamic_forwards(forwards: &[DynamicForwardDto]) -> Result<(), String> {
+    for dto in forwards {
+        let forward = DynamicForward::from(dto.clone());
+        if forward.to_string().parse::<DynamicForward>().as_ref() != Ok(&forward) {
+            return Err(format!("'{forward}' is not a valid dynamic forward"));
         }
     }
     Ok(())
@@ -429,6 +729,12 @@ impl From<HostInputDto> for Host {
                 .monitor_port
                 .filter(|&p| p != 0 && monitoring == MonitorMode::TcpPort),
             local_forwards: dto.local_forwards.into_iter().map(Into::into).collect(),
+            remote_forwards: dto.remote_forwards.into_iter().map(Into::into).collect(),
+            dynamic_forwards: dto.dynamic_forwards.into_iter().map(Into::into).collect(),
+            proxy: dto
+                .proxy
+                .filter(|p| !p.host.trim().is_empty() && p.port != 0)
+                .map(Into::into),
             tunnel_autostart: dto.tunnel_autostart,
             forward_agent: dto.forward_agent,
             key_setup_date: None,
@@ -564,6 +870,7 @@ impl From<&FileEntry> for FileEntryDto {
             size: entry.size,
             is_dir: entry.is_dir,
             modified: entry.modified,
+            permissions: entry.permissions,
         }
     }
 }
@@ -682,6 +989,9 @@ mod tests {
             monitoring: None,
             monitor_port: None,
             local_forwards: vec![],
+            remote_forwards: vec![],
+            dynamic_forwards: vec![],
+            proxy: None,
             tunnel_autostart: false,
             forward_agent: false,
         }
@@ -738,6 +1048,9 @@ mod tests {
             monitoring: None,
             monitor_port: None,
             local_forwards: vec![],
+            remote_forwards: vec![],
+            dynamic_forwards: vec![],
+            proxy: None,
             tunnel_autostart: false,
             forward_agent: false,
         });
@@ -949,6 +1262,7 @@ mod tests {
             size: 4096,
             is_dir: false,
             modified: Some(1_700_000_000),
+            permissions: Some(0o644),
         };
         let dto = FileEntryDto::from(&file);
         assert_eq!(dto.name, "config.toml");
@@ -956,6 +1270,7 @@ mod tests {
         assert_eq!(dto.size, 4096);
         assert!(!dto.is_dir);
         assert_eq!(dto.modified, Some(1_700_000_000));
+        assert_eq!(dto.permissions, Some(0o644));
 
         let dir = FileEntry {
             name: "..".to_string(),
@@ -963,6 +1278,7 @@ mod tests {
             size: 0,
             is_dir: true,
             modified: None,
+            permissions: None,
         };
         let dto = FileEntryDto::from(&dir);
         assert!(dto.is_dir);
@@ -980,6 +1296,7 @@ mod tests {
             size: 0,
             is_dir: true,
             modified: Some(1_700_000_000),
+            permissions: None,
         }))
         .expect("serialise FileEntryDto");
         assert_eq!(

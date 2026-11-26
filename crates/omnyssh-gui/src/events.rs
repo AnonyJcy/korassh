@@ -131,6 +131,16 @@ pub struct FilePreview {
     pub content: String,
 }
 
+/// Full UTF-8 remote text file content ready for inline editing (or an error).
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContentReady {
+    pub session_id: u64,
+    pub path: String,
+    pub content: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Live transfer progress (tech-gui.md §4.3). The payload is `TransferProgressDto`,
 /// routed to its owning session via `transfer_owner` (§3.4/§4.1).
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type, tauri_specta::Event)]

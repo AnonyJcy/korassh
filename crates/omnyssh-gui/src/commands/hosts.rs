@@ -4,7 +4,9 @@ use tauri_specta::Event;
 use omnyssh_core::config::{load_hosts, save_hosts};
 use omnyssh_core::ssh::client::{Host, HostSource};
 
-use crate::dto::{check_forwards, HostDto, HostInputDto};
+use crate::dto::{
+    check_dynamic_forwards, check_forwards, check_remote_forwards, HostDto, HostInputDto,
+};
 use crate::error::CommandError;
 use crate::events;
 use crate::state::GuiState;
@@ -80,6 +82,8 @@ pub async fn save_host(
     state: State<'_, GuiState>,
 ) -> Result<(), CommandError> {
     check_forwards(&input.local_forwards).map_err(|message| CommandError { message })?;
+    check_remote_forwards(&input.remote_forwards).map_err(|message| CommandError { message })?;
+    check_dynamic_forwards(&input.dynamic_forwards).map_err(|message| CommandError { message })?;
     // The parsed import is the only record of its bastion and key path, and neither
     // crosses the boundary (§3.4), so read them off the cache before the write moves
     // to a blocking task.
@@ -122,6 +126,14 @@ fn upsert(hosts: &mut Vec<Host>, input: HostInputDto, imported: Option<Host>) {
                 .identity_file
                 .or_else(|| existing.identity_file.clone());
             host.proxy_jump = host.proxy_jump.or_else(|| existing.proxy_jump.clone());
+            // Preserve existing proxy password when editing a host without retyping it.
+            if let (Some(ref mut next_proxy), Some(ref prev_proxy)) =
+                (&mut host.proxy, &existing.proxy)
+            {
+                if next_proxy.password.is_none() {
+                    next_proxy.password = prev_proxy.password.clone();
+                }
+            }
             host.identities_only = existing.identities_only;
             host.key_setup_date = existing.key_setup_date.clone();
             host.password_auth_disabled = existing.password_auth_disabled;
@@ -193,6 +205,9 @@ mod tests {
             monitoring: None,
             monitor_port: None,
             local_forwards: vec![],
+            remote_forwards: vec![],
+            dynamic_forwards: vec![],
+            proxy: None,
             tunnel_autostart: false,
             forward_agent: false,
         }

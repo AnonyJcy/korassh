@@ -301,6 +301,7 @@ enum SftpOutbound {
     OpDone(events::SftpOpDone),
     Disconnected(events::SftpDisconnected),
     Preview(events::FilePreview),
+    FileContent(events::FileContentReady),
     Progress(events::TransferProgress),
 }
 
@@ -312,6 +313,7 @@ impl SftpOutbound {
             SftpOutbound::OpDone(e) => e.emit(app),
             SftpOutbound::Disconnected(e) => e.emit(app),
             SftpOutbound::Preview(e) => e.emit(app),
+            SftpOutbound::FileContent(e) => e.emit(app),
             SftpOutbound::Progress(e) => e.emit(app),
         };
     }
@@ -354,6 +356,18 @@ fn map_sftp_event(session_id: SessionId, event: CoreEvent) -> Option<SftpOutboun
                 session_id,
                 path,
                 content,
+            })
+        }
+        CoreEvent::FileContentReady { path, result } => {
+            let (content, error) = match result {
+                Ok(text) => (Some(text), None),
+                Err(msg) => (None, Some(msg)),
+            };
+            SftpOutbound::FileContent(events::FileContentReady {
+                session_id,
+                path,
+                content,
+                error,
             })
         }
         CoreEvent::FileTransferProgress(transfer_id, done, total) => {
@@ -504,6 +518,7 @@ mod tests {
             size: 0,
             is_dir: false,
             modified: None,
+            permissions: None,
         }
     }
 
