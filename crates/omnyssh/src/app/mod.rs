@@ -1107,6 +1107,8 @@ impl App {
                 self.view.file_manager.preview_path = Some(path);
             }
 
+            CoreEvent::FileContentReady { .. } => {}
+
             CoreEvent::SftpOpDone { result } => {
                 let fm = &mut self.view.file_manager;
                 fm.pending_ops = fm.pending_ops.saturating_sub(1);

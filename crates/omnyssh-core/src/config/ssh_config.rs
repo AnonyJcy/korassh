@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::ssh::client::{Host, HostSource};
-use crate::ssh::tunnel::LocalForward;
+use crate::ssh::tunnel::{DynamicForward, LocalForward, RemoteForward};
 
 /// Parses the text of an SSH config file and returns all non-wildcard hosts.
 ///
@@ -170,6 +170,26 @@ fn parse_content(
                     }
                 }
             }
+            "remoteforward" if !in_wildcard => {
+                if let Some(ref mut h) = current {
+                    match parse_remote_forward(value) {
+                        Ok(forward) => h.remote_forwards.push(forward),
+                        Err(e) => {
+                            tracing::warn!(host = %h.name, error = %e, "RemoteForward skipped")
+                        }
+                    }
+                }
+            }
+            "dynamicforward" if !in_wildcard => {
+                if let Some(ref mut h) = current {
+                    match value.parse::<DynamicForward>() {
+                        Ok(forward) => h.dynamic_forwards.push(forward),
+                        Err(e) => {
+                            tracing::warn!(host = %h.name, error = %e, "DynamicForward skipped")
+                        }
+                    }
+                }
+            }
             // Lending the agent is never read from outside a host's own block, but a
             // `no` there still counts: which host it covers is not worked out here,
             // so it covers every host after it. A socket path or `$VAR` names another
@@ -268,6 +288,16 @@ fn parse_content(
 /// Parses a `LocalForward` value: `[bind_address:]port host:hostport`, the two
 /// arguments `ssh_config(5)` takes, joined into the `ssh -L` notation.
 fn parse_local_forward(value: &str) -> Result<LocalForward, String> {
+    match value.split_whitespace().collect::<Vec<_>>().as_slice() {
+        [listen, target] => format!("{listen}:{target}").parse(),
+        _ => Err(format!(
+            "expected '[bind_address:]port host:hostport', got '{value}'"
+        )),
+    }
+}
+
+/// Parses a `RemoteForward` value: `[bind_address:]port host:hostport`, joined into `ssh -R`.
+fn parse_remote_forward(value: &str) -> Result<RemoteForward, String> {
     match value.split_whitespace().collect::<Vec<_>>().as_slice() {
         [listen, target] => format!("{listen}:{target}").parse(),
         _ => Err(format!(

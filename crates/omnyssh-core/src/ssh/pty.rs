@@ -502,6 +502,36 @@ impl PtyManager {
         Ok(id)
     }
 
+    /// Opens a local shell PTY (PowerShell/cmd on Windows, `$SHELL` / `/bin/sh` on Unix)
+    /// sharing the same session id space, raw-output tap, resize, write, and exit events.
+    pub fn open_local(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        tx: mpsc::Sender<CoreEvent>,
+    ) -> Result<SessionId> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 1000)));
+        let (ctrl_tx, ctrl_rx) = mpsc::unbounded_channel();
+        tokio::spawn(local_session_task(
+            id,
+            cols,
+            rows,
+            Arc::clone(&parser),
+            ctrl_rx,
+            tx,
+            self.raw_output.clone(),
+        ));
+        self.sessions.push(PtySession {
+            id,
+            parser,
+            ctrl_tx,
+        });
+        tracing::info!("local terminal session {} opened", id);
+        Ok(id)
+    }
+
     /// Sends raw bytes to the session identified by `id`. Unknown id is a no-op.
     ///
     /// # Errors
@@ -551,6 +581,173 @@ impl PtyManager {
             .find(|s| s.id == id)
             .map(|s| Arc::clone(&s.parser))
     }
+}
+
+/// Picks the platform's interactive local shell command.
+fn default_local_shell_command() -> portable_pty::CommandBuilder {
+    #[cfg(windows)]
+    let mut cmd = {
+        let shell = std::env::var("COMSPEC")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "cmd.exe".to_string());
+        // Prefer PowerShell when available on PATH for modern Windows terminal UX.
+        let program = if std::process::Command::new("powershell.exe")
+            .arg("-NoLogo")
+            .arg("-Command")
+            .arg("exit 0")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            "powershell.exe".to_string()
+        } else {
+            shell
+        };
+        portable_pty::CommandBuilder::new(program)
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "/bin/sh".to_string());
+        let mut b = portable_pty::CommandBuilder::new(shell);
+        b.env("TERM", "xterm-256color");
+        b.env("COLORTERM", "truecolor");
+        b
+    };
+    if let Some(home) = dirs::home_dir() {
+        cmd.cwd(home);
+    }
+    cmd
+}
+
+/// Runs a local PTY shell session on the same event/raw-output contract as SSH sessions.
+async fn local_session_task(
+    id: SessionId,
+    cols: u16,
+    rows: u16,
+    parser: Arc<Mutex<vt100::Parser>>,
+    mut ctrl_rx: mpsc::UnboundedReceiver<Ctrl>,
+    tx: mpsc::Sender<CoreEvent>,
+    raw_output: Option<mpsc::Sender<(SessionId, Vec<u8>)>>,
+) {
+    use std::io::{Read, Write};
+
+    let pty_system = portable_pty::native_pty_system();
+    let pair = match pty_system.openpty(portable_pty::PtySize {
+        rows: rows.max(1),
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    }) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = tx
+                .send(CoreEvent::Error(format!("failed to open local PTY: {e}")))
+                .await;
+            let _ = tx.send(CoreEvent::PtyExited(id)).await;
+            return;
+        }
+    };
+
+    let cmd = default_local_shell_command();
+    let mut child = match pair.slave.spawn_command(cmd) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx
+                .send(CoreEvent::Error(format!(
+                    "failed to start local shell: {e}"
+                )))
+                .await;
+            let _ = tx.send(CoreEvent::PtyExited(id)).await;
+            return;
+        }
+    };
+    drop(pair.slave);
+
+    let mut reader = match pair.master.try_clone_reader() {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = tx
+                .send(CoreEvent::Error(format!(
+                    "failed to clone local PTY reader: {e}"
+                )))
+                .await;
+            let _ = tx.send(CoreEvent::PtyExited(id)).await;
+            return;
+        }
+    };
+    let mut writer = match pair.master.take_writer() {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = tx
+                .send(CoreEvent::Error(format!(
+                    "failed to open local PTY writer: {e}"
+                )))
+                .await;
+            let _ = tx.send(CoreEvent::PtyExited(id)).await;
+            return;
+        }
+    };
+
+    let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<()>();
+    let parser_reader = Arc::clone(&parser);
+    let tx_reader = tx.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let chunk = buf[..n].to_vec();
+                    feed_parser(&parser_reader, &chunk);
+                    if let Some(ref raw) = raw_output {
+                        let _ = raw.blocking_send((id, chunk));
+                    }
+                    let _ = tx_reader.blocking_send(CoreEvent::PtyOutput(id));
+                }
+            }
+        }
+        let _ = done_tx.send(());
+    });
+
+    let master = pair.master;
+    loop {
+        tokio::select! {
+            _ = &mut done_rx => break,
+            ctrl = ctrl_rx.recv() => match ctrl {
+                Some(Ctrl::Input(data)) => {
+                    if writer.write_all(&data).is_err() {
+                        break;
+                    }
+                    let _ = writer.flush();
+                }
+                Some(Ctrl::Resize { cols, rows }) => {
+                    let _ = master.resize(portable_pty::PtySize {
+                        rows: rows.max(1),
+                        cols: cols.max(1),
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    });
+                }
+                Some(Ctrl::Close) | None => {
+                    let _ = child.kill();
+                    break;
+                }
+            }
+        }
+    }
+
+    drop(writer);
+    drop(master);
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = tx.send(CoreEvent::PtyExited(id)).await;
 }
 
 impl Default for PtyManager {

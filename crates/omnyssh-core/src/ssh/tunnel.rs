@@ -22,7 +22,7 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
@@ -99,6 +99,118 @@ impl fmt::Display for LocalForward {
 
 impl From<LocalForward> for String {
     fn from(forward: LocalForward) -> Self {
+        forward.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RemoteForward (`ssh -R`)
+// ---------------------------------------------------------------------------
+
+/// One `ssh -R` rule: `[bind_address:]remote_port:local_host:local_port`.
+///
+/// The SSH server listens on `bind_address:remote_port` and forwards incoming
+/// connections back over `forwarded-tcpip` to `local_host:local_port` here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(into = "String")]
+pub struct RemoteForward {
+    pub bind_address: Option<String>,
+    pub remote_port: u16,
+    pub local_host: String,
+    pub local_port: u16,
+}
+
+impl FromStr for RemoteForward {
+    type Err = String;
+
+    fn from_str(spec: &str) -> Result<Self, Self::Err> {
+        let spec = spec.trim();
+        let usage =
+            || format!("expected [bind_address:]remote_port:local_host:local_port, got '{spec}'");
+        let fields = split_fields(spec).ok_or_else(usage)?;
+        let (bind_address, remote_port, local_host, local_port) = match fields.as_slice() {
+            [rport, host, lport] => (None, *rport, *host, *lport),
+            [bind, rport, host, lport] => (Some(*bind), *rport, *host, *lport),
+            _ => return Err(usage()),
+        };
+        if local_host.is_empty() {
+            return Err(usage());
+        }
+        Ok(Self {
+            bind_address: bind_address.map(str::to_string),
+            remote_port: parse_port(remote_port, spec)?,
+            local_host: local_host.to_string(),
+            local_port: parse_port(local_port, spec)?,
+        })
+    }
+}
+
+impl fmt::Display for RemoteForward {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(bind) = &self.bind_address {
+            write!(f, "{}:", bracketed(bind))?;
+        }
+        write!(
+            f,
+            "{}:{}:{}",
+            self.remote_port,
+            bracketed(&self.local_host),
+            self.local_port
+        )
+    }
+}
+
+impl From<RemoteForward> for String {
+    fn from(forward: RemoteForward) -> Self {
+        forward.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DynamicForward (`ssh -D`, SOCKS5)
+// ---------------------------------------------------------------------------
+
+/// One `ssh -D` rule: `[bind_address:]bind_port`.
+///
+/// Opens a local SOCKS5 proxy (RFC 1928) that routes every client `CONNECT`
+/// request over a `direct-tcpip` SSH channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(into = "String")]
+pub struct DynamicForward {
+    pub bind_address: Option<String>,
+    pub bind_port: u16,
+}
+
+impl FromStr for DynamicForward {
+    type Err = String;
+
+    fn from_str(spec: &str) -> Result<Self, Self::Err> {
+        let spec = spec.trim();
+        let usage = || format!("expected [bind_address:]bind_port, got '{spec}'");
+        let fields = split_fields(spec).ok_or_else(usage)?;
+        let (bind_address, bind_port) = match fields.as_slice() {
+            [port] => (None, *port),
+            [bind, port] => (Some(*bind), *port),
+            _ => return Err(usage()),
+        };
+        Ok(Self {
+            bind_address: bind_address.map(str::to_string),
+            bind_port: parse_port(bind_port, spec)?,
+        })
+    }
+}
+
+impl fmt::Display for DynamicForward {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(bind) = &self.bind_address {
+            write!(f, "{}:", bracketed(bind))?;
+        }
+        write!(f, "{}", self.bind_port)
+    }
+}
+
+impl From<DynamicForward> for String {
+    fn from(forward: DynamicForward) -> Self {
         forward.to_string()
     }
 }
@@ -257,7 +369,7 @@ impl TunnelManager {
     /// Starts the tunnel of every host marked to start on launch.
     pub fn autostart(&mut self, hosts: &[Host]) {
         for host in hosts {
-            if host.tunnel_autostart && !host.local_forwards.is_empty() {
+            if host.tunnel_autostart && host.has_tunnels() {
                 self.start(host.clone());
             }
         }
@@ -288,7 +400,7 @@ impl TunnelManager {
                 continue;
             }
             match hosts.iter().find(|h| h.name == name) {
-                Some(host) if host.local_forwards.is_empty() => self.stop(&name),
+                Some(host) if !host.has_tunnels() => self.stop(&name),
                 Some(host) if self.runs.get(&name).is_some_and(|r| changed(&r.host, host)) => {
                     self.start(host.clone());
                 }
@@ -315,7 +427,10 @@ fn changed(before: &Host, after: &Host) -> bool {
         || before.identities_only != after.identities_only
         || before.password != after.password
         || before.proxy_jump != after.proxy_jump
+        || before.proxy != after.proxy
         || before.local_forwards != after.local_forwards
+        || before.remote_forwards != after.remote_forwards
+        || before.dynamic_forwards != after.dynamic_forwards
 }
 
 // ---------------------------------------------------------------------------
@@ -346,10 +461,10 @@ async fn run_tunnel(
 /// Holds the ports and keeps the connection up. Returns only once the tunnel
 /// cannot go on.
 async fn serve(host: &Host, tx: &mpsc::Sender<CoreEvent>) -> TunnelStatus {
-    if host.local_forwards.is_empty() {
+    if !host.has_tunnels() {
         return TunnelStatus::Failed(String::from("no port forwards are set up for this host"));
     }
-    let listeners = match bind_all(&host.local_forwards).await {
+    let listeners = match bind_all(&host.local_forwards, &host.dynamic_forwards).await {
         Ok(listeners) => listeners,
         Err(e) => return TunnelStatus::Failed(e),
     };
@@ -365,13 +480,19 @@ async fn serve(host: &Host, tx: &mpsc::Sender<CoreEvent>) -> TunnelStatus {
         let reason =
             match time::timeout(budget, connect_and_auth(host, Passwords::Remembered)).await {
                 Ok(Ok(conn)) => {
-                    send_status(tx, &host.name, TunnelStatus::Up).await;
-                    let since = Instant::now();
-                    let reason = forward(Arc::new(conn), &listeners, tx, &host.name).await;
-                    if since.elapsed() >= STABLE_AFTER {
-                        retry = 0;
+                    let conn = Arc::new(conn);
+                    match setup_remote_forwards(&conn, &host.remote_forwards).await {
+                        Ok(()) => {
+                            send_status(tx, &host.name, TunnelStatus::Up).await;
+                            let since = Instant::now();
+                            let reason = forward(conn, &listeners, tx, &host.name).await;
+                            if since.elapsed() >= STABLE_AFTER {
+                                retry = 0;
+                            }
+                            reason
+                        }
+                        Err(e) => e,
                     }
-                    reason
                 }
                 Ok(Err(e)) if is_refused(&e) => return TunnelStatus::Failed(format!("{e:#}")),
                 Ok(Err(e)) => {
@@ -412,15 +533,65 @@ async fn serve(host: &Host, tx: &mpsc::Sender<CoreEvent>) -> TunnelStatus {
     }
 }
 
-/// A bound forward: its rule, and every socket it listens on.
-type Bound = (LocalForward, Vec<TcpListener>);
+/// Requests `tcpip-forward` on the server for each `ssh -R` rule and registers
+/// its local target route on `conn`.
+async fn setup_remote_forwards(
+    conn: &SshConnection,
+    forwards: &[RemoteForward],
+) -> Result<(), String> {
+    for rule in forwards {
+        let bind_addr = match rule.bind_address.as_deref() {
+            None | Some("localhost") => "127.0.0.1".to_string(),
+            Some("" | "*") => "0.0.0.0".to_string(),
+            Some(addr) => addr.to_string(),
+        };
+        let bound_port = conn
+            .tcpip_forward(bind_addr.clone(), u32::from(rule.remote_port))
+            .await
+            .map_err(|e| format!("remote forward {rule} rejected by server: {e}"))?;
+        let actual_port = if bound_port != 0 {
+            bound_port
+        } else {
+            u32::from(rule.remote_port)
+        };
+        conn.register_remote_forward(
+            bind_addr,
+            actual_port,
+            rule.local_host.clone(),
+            rule.local_port,
+        );
+    }
+    Ok(())
+}
 
-/// Binds every forward, or none: a tunnel missing one of its ports would look
-/// up while quietly not serving it.
-async fn bind_all(forwards: &[LocalForward]) -> Result<Vec<Bound>, String> {
-    let mut bound = Vec::with_capacity(forwards.len());
-    for forward in forwards {
-        bound.push((forward.clone(), bind(forward).await?));
+/// One locally bound listener: either a fixed `ssh -L` rule or an `ssh -D` SOCKS5 listener.
+#[derive(Debug, Clone)]
+enum BoundRule {
+    Local(LocalForward),
+    Dynamic(DynamicForward),
+}
+
+/// A bound forward: its rule, and every socket it listens on.
+type Bound = (BoundRule, Vec<TcpListener>);
+
+/// Binds every local and dynamic forward, or none: a tunnel missing one of its
+/// ports would look up while quietly not serving it.
+async fn bind_all(
+    local_forwards: &[LocalForward],
+    dynamic_forwards: &[DynamicForward],
+) -> Result<Vec<Bound>, String> {
+    let mut bound = Vec::with_capacity(local_forwards.len() + dynamic_forwards.len());
+    for forward in local_forwards {
+        bound.push((
+            BoundRule::Local(forward.clone()),
+            bind_address(forward.bind_address.as_deref(), forward.bind_port).await?,
+        ));
+    }
+    for forward in dynamic_forwards {
+        bound.push((
+            BoundRule::Dynamic(forward.clone()),
+            bind_address(forward.bind_address.as_deref(), forward.bind_port).await?,
+        ));
     }
     Ok(bound)
 }
@@ -428,30 +599,28 @@ async fn bind_all(forwards: &[LocalForward]) -> Result<Vec<Bound>, String> {
 /// Binds one forward's addresses. The loopback is IPv4 plus, where the system
 /// has one, IPv6 — as ssh does — so `localhost` reaches the tunnel whichever
 /// family a client tries first.
-async fn bind(forward: &LocalForward) -> Result<Vec<TcpListener>, String> {
-    let port = forward.bind_port;
+async fn bind_address(bind_addr: Option<&str>, port: u16) -> Result<Vec<TcpListener>, String> {
     let failed = |address: &str, e: io::Error| format!("cannot listen on {address}:{port}: {e}");
-    let (required, optional): (Vec<SocketAddr>, Vec<SocketAddr>) =
-        match forward.bind_address.as_deref() {
-            None | Some("localhost") => (
-                vec![SocketAddr::from((Ipv4Addr::LOCALHOST, port))],
-                vec![SocketAddr::from((Ipv6Addr::LOCALHOST, port))],
-            ),
-            Some("" | "*") => (
-                vec![SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))],
+    let (required, optional): (Vec<SocketAddr>, Vec<SocketAddr>) = match bind_addr {
+        None | Some("localhost") => (
+            vec![SocketAddr::from((Ipv4Addr::LOCALHOST, port))],
+            vec![SocketAddr::from((Ipv6Addr::LOCALHOST, port))],
+        ),
+        Some("" | "*") => (
+            vec![SocketAddr::from((Ipv4Addr::UNSPECIFIED, port))],
+            vec![],
+        ),
+        Some(address) => match address.parse::<IpAddr>() {
+            Ok(ip) => (vec![SocketAddr::new(ip, port)], vec![]),
+            Err(_) => (
+                tokio::net::lookup_host((address, port))
+                    .await
+                    .map_err(|e| failed(address, e))?
+                    .collect(),
                 vec![],
             ),
-            Some(address) => match address.parse::<IpAddr>() {
-                Ok(ip) => (vec![SocketAddr::new(ip, port)], vec![]),
-                Err(_) => (
-                    tokio::net::lookup_host((address, port))
-                        .await
-                        .map_err(|e| failed(address, e))?
-                        .collect(),
-                    vec![],
-                ),
-            },
-        };
+        },
+    };
 
     let mut listeners = Vec::new();
     for address in required {
@@ -484,11 +653,25 @@ async fn forward(
     let mut liveness = time::interval(LIVENESS_CHECK);
     loop {
         tokio::select! {
-            (index, accepted) = accept(listeners) => match accepted {
+            (index, accepted) = accept(listeners), if !listeners.is_empty() => match accepted {
                 Ok((socket, peer)) => {
                     let rule = listeners[index].0.clone();
                     let (tx, name) = (tx.clone(), name.to_string());
-                    streams.spawn(carry(Arc::clone(&conn), rule, socket, peer, tx, name));
+                    match rule {
+                        BoundRule::Local(local) => {
+                            streams.spawn(carry(Arc::clone(&conn), local, socket, peer, tx, name));
+                        }
+                        BoundRule::Dynamic(dynamic) => {
+                            streams.spawn(carry_socks5(
+                                Arc::clone(&conn),
+                                dynamic,
+                                socket,
+                                peer,
+                                tx,
+                                name,
+                            ));
+                        }
+                    }
                 }
                 // Per-connection trouble such as a full file table; the listener
                 // itself is fine, so back off briefly instead of spinning.
@@ -559,6 +742,125 @@ async fn carry(
     // A channel does not close when dropped: without this, every connection that
     // ended abruptly would hold its channel, and the server's socket to the
     // target, until the tunnel itself went down.
+    let _ = channel.close().await;
+}
+
+/// Handles one incoming client connection on a `ssh -D` local SOCKS5 listener (RFC 1928).
+async fn carry_socks5(
+    conn: Arc<SshConnection>,
+    forward: DynamicForward,
+    mut socket: TcpStream,
+    peer: SocketAddr,
+    tx: mpsc::Sender<CoreEvent>,
+    name: String,
+) {
+    // 1. Greeting: VER (0x05), NMETHODS, METHODS...
+    let mut head = [0u8; 2];
+    if socket.read_exact(&mut head).await.is_err() || head[0] != 0x05 {
+        return;
+    }
+    let mut methods = vec![0u8; usize::from(head[1])];
+    if socket.read_exact(&mut methods).await.is_err() {
+        return;
+    }
+    if !methods.contains(&0x00) {
+        let _ = socket.write_all(&[0x05, 0xFF]).await;
+        return;
+    }
+    if socket.write_all(&[0x05, 0x00]).await.is_err() {
+        return;
+    }
+
+    // 2. Request: VER (0x05), CMD (0x01 = CONNECT), RSV, ATYP, DST.ADDR, DST.PORT.
+    let mut req = [0u8; 4];
+    if socket.read_exact(&mut req).await.is_err() || req[0] != 0x05 {
+        return;
+    }
+    if req[1] != 0x01 {
+        // Command not supported.
+        let _ = socket
+            .write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+            .await;
+        return;
+    }
+
+    let dest_host = match req[3] {
+        0x01 => {
+            let mut ip = [0u8; 4];
+            if socket.read_exact(&mut ip).await.is_err() {
+                return;
+            }
+            Ipv4Addr::from(ip).to_string()
+        }
+        0x03 => {
+            let mut len = [0u8; 1];
+            if socket.read_exact(&mut len).await.is_err() {
+                return;
+            }
+            let mut dom = vec![0u8; usize::from(len[0])];
+            if socket.read_exact(&mut dom).await.is_err() {
+                return;
+            }
+            match String::from_utf8(dom) {
+                Ok(s) => s,
+                Err(_) => return,
+            }
+        }
+        0x04 => {
+            let mut ip = [0u8; 16];
+            if socket.read_exact(&mut ip).await.is_err() {
+                return;
+            }
+            Ipv6Addr::from(ip).to_string()
+        }
+        _ => {
+            let _ = socket
+                .write_all(&[0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .await;
+            return;
+        }
+    };
+
+    let mut port_bytes = [0u8; 2];
+    if socket.read_exact(&mut port_bytes).await.is_err() {
+        return;
+    }
+    let dest_port = u16::from_be_bytes(port_bytes);
+
+    let opened = conn
+        .channel_open_direct_tcpip(
+            dest_host.as_str(),
+            u32::from(dest_port),
+            peer.ip().to_string(),
+            u32::from(peer.port()),
+        )
+        .await;
+    let mut channel = match opened {
+        Ok(ch) => ch,
+        Err(e) => {
+            let _ = socket
+                .write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+                .await;
+            let message = format!(
+                "SOCKS5 tunnel to '{name}' ({forward}): {dest_host}:{dest_port} failed: {e}"
+            );
+            let _ = tx.send(CoreEvent::Error(message)).await;
+            return;
+        }
+    };
+
+    if socket
+        .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+        .await
+        .is_err()
+    {
+        let _ = channel.close().await;
+        return;
+    }
+
+    if let Err(e) = pump(socket, &mut channel).await {
+        tracing::debug!(%forward, %dest_host, dest_port, error = %e, "SOCKS5 connection ended");
+    }
     let _ = channel.close().await;
 }
 
@@ -762,7 +1064,7 @@ mod tests {
             rule(None, spare, "localhost", 80),
             rule(None, busy, "localhost", 80),
         ];
-        let err = bind_all(&forwards)
+        let err = bind_all(&forwards, &[])
             .await
             .expect_err("the busy port must fail");
         assert!(err.contains(&busy.to_string()), "{err}");
@@ -771,5 +1073,30 @@ mod tests {
         TcpListener::bind(("127.0.0.1", spare))
             .await
             .expect("the spare port is free again");
+    }
+
+    #[test]
+    fn remote_and_dynamic_forwards_parse_and_round_trip() {
+        let rf: RemoteForward = "8080:127.0.0.1:3000".parse().expect("valid -R");
+        assert_eq!(rf.bind_address, None);
+        assert_eq!(rf.remote_port, 8080);
+        assert_eq!(rf.local_host, "127.0.0.1");
+        assert_eq!(rf.local_port, 3000);
+        assert_eq!(rf.to_string(), "8080:127.0.0.1:3000");
+
+        let rf_bind: RemoteForward = "0.0.0.0:9000:localhost:80".parse().expect("valid bind -R");
+        assert_eq!(rf_bind.bind_address.as_deref(), Some("0.0.0.0"));
+        assert_eq!(rf_bind.to_string(), "0.0.0.0:9000:localhost:80");
+        assert!("invalid".parse::<RemoteForward>().is_err());
+
+        let df: DynamicForward = "1080".parse().expect("valid -D");
+        assert_eq!(df.bind_address, None);
+        assert_eq!(df.bind_port, 1080);
+        assert_eq!(df.to_string(), "1080");
+
+        let df_bind: DynamicForward = "127.0.0.1:10808".parse().expect("valid bind -D");
+        assert_eq!(df_bind.bind_address.as_deref(), Some("127.0.0.1"));
+        assert_eq!(df_bind.to_string(), "127.0.0.1:10808");
+        assert!("0".parse::<DynamicForward>().is_err());
     }
 }

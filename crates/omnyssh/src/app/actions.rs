@@ -275,7 +275,7 @@ impl App {
                 let (Some(host), Some(tunnels)) = (host, &mut self.tunnel_manager) else {
                     return Ok(());
                 };
-                if host.local_forwards.is_empty() {
+                if !host.has_tunnels() {
                     self.view.status_message = Some(format!(
                         "No port forwards set for '{}' — add them with e",
                         host.name

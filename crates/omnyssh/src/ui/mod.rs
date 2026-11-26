@@ -176,6 +176,7 @@ mod tests {
                 size: 14,
                 is_dir: false,
                 modified: None,
+                permissions: None,
             })
             .collect();
         // The preview repeats the name in its title.

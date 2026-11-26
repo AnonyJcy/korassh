@@ -110,7 +110,12 @@ pub enum CoreEvent {
     SftpDisconnected { reason: String },
     /// Preview bytes available for a file.
     FilePreviewReady { path: String, content: String },
-    /// A mutating SFTP operation (delete, mkdir, rename, upload, download) finished.
+    /// Full UTF-8 text content of a remote file ready for inline editing.
+    FileContentReady {
+        path: String,
+        result: Result<String, String>,
+    },
+    /// A mutating SFTP operation (delete, mkdir, rename, upload, download, write, chmod) finished.
     SftpOpDone { result: Result<(), String> },
 
     // -----------------------------------------------------------------------

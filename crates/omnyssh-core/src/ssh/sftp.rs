@@ -43,6 +43,8 @@ pub struct FileEntry {
     pub is_dir: bool,
     /// Last modification time, in seconds since the Unix epoch, when known.
     pub modified: Option<i64>,
+    /// POSIX permission bits (lower 12 bits, e.g. `0o755`), when known.
+    pub permissions: Option<u32>,
 }
 
 impl FileEntry {
@@ -54,6 +56,7 @@ impl FileEntry {
             size: 0,
             is_dir: true,
             modified: None,
+            permissions: None,
         }
     }
 }
@@ -100,6 +103,12 @@ pub enum SftpCommand {
     Rename { from: String, to: String },
     /// Read the first 4 096 bytes of a remote file for preview.
     ReadPreview(String),
+    /// Read a remote text file in full (bounded by `max_bytes`, default 2 MiB) for inline editing.
+    ReadFile { path: String, max_bytes: usize },
+    /// Write UTF-8 text content back to a remote file (preserving existing permissions).
+    WriteFile { path: String, content: String },
+    /// Change POSIX permissions (lower 12 bits, e.g. `0o755`) on a remote file or directory.
+    Chmod { path: String, mode: u32 },
     /// Shut down the task gracefully.
     Disconnect,
 }
@@ -283,6 +292,29 @@ async fn sftp_task_loop(
                 }
             }
 
+            SftpCommand::ReadFile { path, max_bytes } => {
+                let result = do_read_text_file(&sftp, &path, max_bytes)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                let _ = event_tx
+                    .send(CoreEvent::FileContentReady { path, result })
+                    .await;
+            }
+
+            SftpCommand::WriteFile { path, content } => {
+                let result = do_write_text_file(&sftp, &path, &content)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                let _ = event_tx.send(CoreEvent::SftpOpDone { result }).await;
+            }
+
+            SftpCommand::Chmod { path, mode } => {
+                let result = do_chmod(&sftp, &path, mode)
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                let _ = event_tx.send(CoreEvent::SftpOpDone { result }).await;
+            }
+
             SftpCommand::Disconnect => break,
         }
     }
@@ -327,6 +359,7 @@ async fn do_list_dir(
             size: meta.size.unwrap_or(0),
             is_dir: ft.is_dir(),
             modified: meta.mtime.map(i64::from),
+            permissions: meta.permissions.map(|p| p & 0o7777),
         });
     }
 
@@ -1018,6 +1051,90 @@ async fn do_read_preview(
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
+/// Default size ceiling for inline remote text file editing (2 MiB).
+pub const MAX_EDIT_FILE_BYTES: usize = 2 * 1024 * 1024;
+
+async fn do_read_text_file(
+    sftp: &russh_sftp::client::SftpSession,
+    path: &str,
+    max_bytes: usize,
+) -> anyhow::Result<String> {
+    let limit = if max_bytes == 0 {
+        MAX_EDIT_FILE_BYTES
+    } else {
+        max_bytes.min(MAX_EDIT_FILE_BYTES)
+    };
+    if let Ok(meta) = sftp.metadata(path).await {
+        if let Some(size) = meta.size {
+            if size as usize > limit {
+                anyhow::bail!(
+                    "file is too large for inline editor ({} bytes, limit {} bytes)",
+                    size,
+                    limit
+                );
+            }
+        }
+    }
+    let mut file = sftp
+        .open(path)
+        .await
+        .context("open remote file for editing")?;
+    let mut out = Vec::new();
+    let mut chunk = vec![0u8; 32_768];
+    loop {
+        let n = file.read(&mut chunk).await.context("read remote file")?;
+        if n == 0 {
+            break;
+        }
+        if out.len().saturating_add(n) > limit {
+            anyhow::bail!("file exceeds inline editor size limit ({limit} bytes)");
+        }
+        out.extend_from_slice(&chunk[..n]);
+    }
+    if out.contains(&0) {
+        anyhow::bail!("file appears to be binary (contains NUL bytes)");
+    }
+    String::from_utf8(out).map_err(|_| anyhow::anyhow!("file is not valid UTF-8 text"))
+}
+
+async fn do_write_text_file(
+    sftp: &russh_sftp::client::SftpSession,
+    path: &str,
+    content: &str,
+) -> anyhow::Result<()> {
+    let existing_mode = sftp
+        .metadata(path)
+        .await
+        .ok()
+        .and_then(|m| m.permissions)
+        .map(|p| p & 0o7777);
+    sftp.write(path, content.as_bytes())
+        .await
+        .with_context(|| format!("write remote file '{path}'"))?;
+    if let Some(mode) = existing_mode {
+        let attrs = FileAttributes {
+            permissions: Some(mode),
+            ..Default::default()
+        };
+        let _ = sftp.set_metadata(path, attrs).await;
+    }
+    Ok(())
+}
+
+async fn do_chmod(
+    sftp: &russh_sftp::client::SftpSession,
+    path: &str,
+    mode: u32,
+) -> anyhow::Result<()> {
+    let attrs = FileAttributes {
+        permissions: Some(mode & 0o7777),
+        ..Default::default()
+    };
+    sftp.set_metadata(path, attrs)
+        .await
+        .with_context(|| format!("chmod '{path}' to {:04o}", mode & 0o7777))
+}
+
 // ---------------------------------------------------------------------------
 // Local filesystem helpers (called via inline tokio::spawn in App)
 // ---------------------------------------------------------------------------
@@ -1058,6 +1175,13 @@ pub async fn list_local_dir(path: &str) -> anyhow::Result<Vec<FileEntry>> {
 
         let name = entry.file_name().to_string_lossy().into_owned();
         let path_str = entry.path().to_string_lossy().into_owned();
+        #[cfg(unix)]
+        let permissions = {
+            use std::os::unix::fs::PermissionsExt;
+            meta.as_ref().map(|m| m.permissions().mode() & 0o7777)
+        };
+        #[cfg(not(unix))]
+        let permissions = None;
 
         entries.push(FileEntry {
             name,
@@ -1065,6 +1189,7 @@ pub async fn list_local_dir(path: &str) -> anyhow::Result<Vec<FileEntry>> {
             size,
             is_dir,
             modified: meta.and_then(|m| unix_secs(m.modified())),
+            permissions,
         });
     }
 

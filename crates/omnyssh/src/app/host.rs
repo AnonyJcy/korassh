@@ -292,6 +292,9 @@ impl HostForm {
             monitoring,
             monitor_port,
             local_forwards,
+            remote_forwards: Vec::new(),
+            dynamic_forwards: Vec::new(),
+            proxy: None,
             tunnel_autostart,
             forward_agent,
             key_setup_date: None,
@@ -711,6 +714,13 @@ impl App {
                         // an imported host would otherwise drop its bastion and
                         // the saved copy would try to connect direct.
                         host.proxy_jump = old_host.and_then(|h| h.proxy_jump.clone());
+                        host.proxy = old_host.and_then(|h| h.proxy.clone());
+                        host.remote_forwards = old_host
+                            .map(|h| h.remote_forwards.clone())
+                            .unwrap_or_default();
+                        host.dynamic_forwards = old_host
+                            .map(|h| h.dynamic_forwards.clone())
+                            .unwrap_or_default();
                         // Nor has IdentitiesOnly, and losing it brings back a login
                         // that offers every agent key.
                         host.identities_only = old_host.is_some_and(|h| h.identities_only);

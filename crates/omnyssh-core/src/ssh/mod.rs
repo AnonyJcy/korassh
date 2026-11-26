@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod password;
 pub mod pool;
 pub mod probe;
+pub mod proxy;
 pub mod pty;
 pub mod services;
 pub mod session;

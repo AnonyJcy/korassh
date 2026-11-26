@@ -306,7 +306,7 @@ fn render_grid(frame: &mut Frame, area: Rect, state: &AppState, view: &ViewState
                         services: state.services.get(&host.name).map(|s| s.as_slice()),
                         monitoring: host.monitoring,
                         monitor_port: host.monitor_port,
-                        has_forwards: !host.local_forwards.is_empty(),
+                        has_forwards: host.has_tunnels(),
                         tunnel: state.tunnel_statuses.get(&host.name),
                     },
                     is_selected,

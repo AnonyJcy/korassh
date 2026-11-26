@@ -5,7 +5,8 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::ssh::tunnel::LocalForward;
+use crate::ssh::proxy::ProxyConfig;
+use crate::ssh::tunnel::{DynamicForward, LocalForward, RemoteForward};
 
 /// Indicates where a host entry originated.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -96,6 +97,23 @@ pub struct Host {
         deserialize_with = "readable_forwards"
     )]
     pub local_forwards: Vec<LocalForward>,
+    /// Remote reverse port forwards (`ssh -R`) carried by this host's tunnel.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "readable_remote_forwards"
+    )]
+    pub remote_forwards: Vec<RemoteForward>,
+    /// Dynamic SOCKS5 forwards (`ssh -D`) carried by this host's tunnel.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "readable_dynamic_forwards"
+    )]
+    pub dynamic_forwards: Vec<DynamicForward>,
+    /// Optional upstream HTTP CONNECT or SOCKS5 proxy for connecting to this host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<ProxyConfig>,
     /// Start the tunnel when OmnySSH starts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub tunnel_autostart: bool,
@@ -128,6 +146,41 @@ fn readable_forwards<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<LocalForward
         .collect())
 }
 
+fn readable_remote_forwards<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<RemoteForward>, D::Error> {
+    Ok(Vec::<String>::deserialize(d)?
+        .into_iter()
+        .filter_map(|spec| {
+            spec.parse()
+                .map_err(|e| tracing::warn!(error = %e, "remote forward skipped"))
+                .ok()
+        })
+        .collect())
+}
+
+fn readable_dynamic_forwards<'de, D: Deserializer<'de>>(
+    d: D,
+) -> Result<Vec<DynamicForward>, D::Error> {
+    Ok(Vec::<String>::deserialize(d)?
+        .into_iter()
+        .filter_map(|spec| {
+            spec.parse()
+                .map_err(|e| tracing::warn!(error = %e, "dynamic forward skipped"))
+                .ok()
+        })
+        .collect())
+}
+
+impl Host {
+    /// Returns `true` when this host configures any port forward (`-L`, `-R`, or `-D`).
+    pub fn has_tunnels(&self) -> bool {
+        !self.local_forwards.is_empty()
+            || !self.remote_forwards.is_empty()
+            || !self.dynamic_forwards.is_empty()
+    }
+}
+
 fn default_user() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
@@ -156,6 +209,9 @@ impl Default for Host {
             monitoring: MonitorMode::default(),
             monitor_port: None,
             local_forwards: Vec::new(),
+            remote_forwards: Vec::new(),
+            dynamic_forwards: Vec::new(),
+            proxy: None,
             tunnel_autostart: false,
             forward_agent: false,
             key_setup_date: None,

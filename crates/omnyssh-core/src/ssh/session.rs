@@ -47,6 +47,17 @@ use crate::ssh::password::{self, AskPassword, Method, NoAnswer, Prompt};
 /// Verifies the server's host key against `~/.ssh/known_hosts` (see
 /// [`known_hosts`]). Unknown hosts are recorded on first connection (trust on
 /// first use); changed keys are rejected.
+/// A registered `ssh -R` remote forward route on an active connection.
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteForwardRoute {
+    pub bind_address: String,
+    pub remote_port: u32,
+    pub local_host: String,
+    pub local_port: u16,
+}
+
+pub(crate) type RemoteForwardTable = Arc<Mutex<Vec<RemoteForwardRoute>>>;
+
 pub(crate) struct KnownHostsHandler {
     /// Hostname used for known_hosts lookup.
     host: String,
@@ -69,10 +80,10 @@ pub(crate) struct KnownHostsHandler {
     /// Whether this connection lends the local agent (`ssh -A`). Only a
     /// terminal's target does; any other gets its agent channels closed.
     lends_agent: bool,
+    /// Active remote (`ssh -R`) forward routes registered on this connection.
+    remote_forwards: RemoteForwardTable,
     /// Dropped with the handler when the session ends, which wakes [`Link::ended`]
-    /// and any agent channel still being carried. Only unix lends the agent, so
-    /// elsewhere it is only ever dropped.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    /// and any agent/reverse-forward channel still being carried.
     ended: watch::Sender<()>,
 }
 
@@ -315,6 +326,85 @@ impl client::Handler for KnownHostsHandler {
         }
         Ok(())
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: russh::Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let target = {
+            let routes = self
+                .remote_forwards
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            routes
+                .iter()
+                .find(|r| {
+                    r.remote_port == connected_port
+                        && (r.bind_address == connected_address
+                            || r.bind_address.is_empty()
+                            || r.bind_address == "*"
+                            || r.bind_address == "0.0.0.0"
+                            || r.bind_address == "localhost")
+                })
+                .or_else(|| routes.iter().find(|r| r.remote_port == connected_port))
+                .map(|r| (r.local_host.clone(), r.local_port))
+        };
+
+        if let Some((local_host, local_port)) = target {
+            reply.accept().await;
+            let ended = self.ended.subscribe();
+            tokio::spawn(carry_remote_forward(channel, local_host, local_port, ended));
+        } else {
+            tracing::warn!(
+                host = %self.host,
+                addr = %connected_address,
+                port = connected_port,
+                "server opened unrequested forwarded-tcpip channel; refused"
+            );
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+        }
+        Ok(())
+    }
+}
+
+/// Bridges an incoming `forwarded-tcpip` (`ssh -R`) channel to the local target service.
+async fn carry_remote_forward(
+    mut channel: russh::Channel<client::Msg>,
+    local_host: String,
+    local_port: u16,
+    mut ended: watch::Receiver<()>,
+) {
+    let target = format!("{local_host}:{local_port}");
+    let mut local = match tokio::net::TcpStream::connect(&target).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!(%target, error = %e, "remote forward local connect failed");
+            let _ = channel.close().await;
+            return;
+        }
+    };
+    {
+        let writer = channel.make_writer();
+        let mut remote = tokio::io::join(channel.make_reader(), writer);
+        tokio::select! {
+            res = tokio::io::copy_bidirectional(&mut remote, &mut local) => {
+                if let Err(e) = res {
+                    tracing::debug!(%target, error = %e, "remote forward connection ended");
+                }
+            }
+            _ = ended.changed() => {}
+        }
+    }
+    let _ = channel.close().await;
 }
 
 /// A key's SHA-256 fingerprint, as ssh(1) prints it.
@@ -555,6 +645,28 @@ pub(crate) struct SshConnection {
     handle: Handle<KnownHostsHandler>,
     /// Bastions, nearest-first. Never used directly — kept alive by ownership.
     _jumps: Vec<Handle<KnownHostsHandler>>,
+    /// Active `ssh -R` reverse-forward route table shared with the target's handler.
+    remote_forwards: RemoteForwardTable,
+}
+
+impl SshConnection {
+    pub(crate) fn register_remote_forward(
+        &self,
+        bind_address: String,
+        remote_port: u32,
+        local_host: String,
+        local_port: u16,
+    ) {
+        self.remote_forwards
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(RemoteForwardRoute {
+                bind_address,
+                remote_port,
+                local_host,
+                local_port,
+            });
+    }
 }
 
 impl std::ops::Deref for SshConnection {
@@ -758,25 +870,44 @@ async fn connect_chain(
     let mut jumps: Vec<Handle<KnownHostsHandler>> = Vec::with_capacity(chain.len());
     for (i, hop) in chain.iter().enumerate() {
         let key = login_key(hop, &chain[..i]);
+        let no_rf: RemoteForwardTable = Arc::default();
         let handle = match jumps.last() {
-            None => connect_direct(hop, &key, &mut passwords, false).await,
-            Some(via) => connect_tunnelled(via, hop, &key, &mut passwords, false).await,
+            None => connect_direct(hop, &key, &mut passwords, false, no_rf).await,
+            Some(via) => connect_tunnelled(via, hop, &key, &mut passwords, false, no_rf).await,
         }
         .map_err(|e| at_hop(e, format!("ProxyJump via '{}' failed", hop.name)))?;
         jumps.push(handle);
     }
 
+    let remote_forwards: RemoteForwardTable = Arc::default();
     let key = login_key(host, &chain);
     let handle = match (jumps.last(), chain.last()) {
-        (Some(via), Some(last)) => connect_tunnelled(via, host, &key, &mut passwords, lends_agent)
-            .await
-            .map_err(|e| at_hop(e, format!("connecting via '{}' failed", last.name)))?,
-        _ => connect_direct(host, &key, &mut passwords, lends_agent).await?,
+        (Some(via), Some(last)) => connect_tunnelled(
+            via,
+            host,
+            &key,
+            &mut passwords,
+            lends_agent,
+            Arc::clone(&remote_forwards),
+        )
+        .await
+        .map_err(|e| at_hop(e, format!("connecting via '{}' failed", last.name)))?,
+        _ => {
+            connect_direct(
+                host,
+                &key,
+                &mut passwords,
+                lends_agent,
+                Arc::clone(&remote_forwards),
+            )
+            .await?
+        }
     };
 
     Ok(SshConnection {
         handle,
         _jumps: jumps,
+        remote_forwards,
     })
 }
 
@@ -907,14 +1038,16 @@ async fn jump_chain(host: &Host) -> anyhow::Result<Vec<Host>> {
     Ok(chain)
 }
 
-/// Opens a TCP connection to `host` and authenticates.
+/// Opens a TCP connection to `host` (optionally via an upstream HTTP/SOCKS5 proxy)
+/// and authenticates.
 async fn connect_direct(
     host: &Host,
     key: &str,
     passwords: &mut Passwords<'_>,
     lends_agent: bool,
+    remote_forwards: RemoteForwardTable,
 ) -> anyhow::Result<Handle<KnownHostsHandler>> {
-    let dial = || dial_direct(host, lends_agent);
+    let dial = || dial_direct(host, lends_agent, Arc::clone(&remote_forwards));
     finish_auth(dial().await?, host, key, dial, passwords).await
 }
 
@@ -927,8 +1060,9 @@ async fn connect_tunnelled(
     key: &str,
     passwords: &mut Passwords<'_>,
     lends_agent: bool,
+    remote_forwards: RemoteForwardTable,
 ) -> anyhow::Result<Handle<KnownHostsHandler>> {
-    let dial = || dial_tunnelled(via, host, lends_agent);
+    let dial = || dial_tunnelled(via, host, lends_agent, Arc::clone(&remote_forwards));
     finish_auth(dial().await?, host, key, dial, passwords).await
 }
 
@@ -963,17 +1097,38 @@ impl Dialed {
     }
 }
 
-/// Opens a TCP connection to `host` and verifies its host key.
-async fn dial_direct(host: &Host, lends_agent: bool) -> anyhow::Result<Dialed> {
-    let addr = format!("{}:{}", host.hostname, host.port);
-    let (handler, link) = known_hosts_handler(host, lends_agent);
-    let handle = time::timeout(
-        CONNECT_TIMEOUT,
-        client::connect(client_config(host), addr, handler),
-    )
-    .await
-    .map_err(|_| anyhow!("SSH connection timed out (10 s)"))?
-    .map_err(|e| link.connect_error(e))?;
+/// Opens a TCP connection to `host` (directly or through `host.proxy`) and
+/// verifies its host key.
+async fn dial_direct(
+    host: &Host,
+    lends_agent: bool,
+    remote_forwards: RemoteForwardTable,
+) -> anyhow::Result<Dialed> {
+    let (handler, link) = known_hosts_handler(host, lends_agent, remote_forwards);
+    let handle = if let Some(ref proxy) = host.proxy {
+        let stream = time::timeout(
+            CONNECT_TIMEOUT,
+            crate::ssh::proxy::connect_via_proxy(proxy, &host.hostname, host.port),
+        )
+        .await
+        .map_err(|_| anyhow!("proxy connection timed out (10 s)"))??;
+        time::timeout(
+            CONNECT_TIMEOUT,
+            client::connect_stream(client_config(host), stream, handler),
+        )
+        .await
+        .map_err(|_| anyhow!("SSH handshake over proxy timed out (10 s)"))?
+        .map_err(|e| link.connect_error(e))?
+    } else {
+        let addr = format!("{}:{}", host.hostname, host.port);
+        time::timeout(
+            CONNECT_TIMEOUT,
+            client::connect(client_config(host), addr, handler),
+        )
+        .await
+        .map_err(|_| anyhow!("SSH connection timed out (10 s)"))?
+        .map_err(|e| link.connect_error(e))?
+    };
     Ok(Dialed {
         handle,
         link,
@@ -988,6 +1143,7 @@ async fn dial_tunnelled(
     via: &Handle<KnownHostsHandler>,
     host: &Host,
     lends_agent: bool,
+    remote_forwards: RemoteForwardTable,
 ) -> anyhow::Result<Dialed> {
     // The originator address is informational; ssh(1) reports the loopback it
     // forwards from, and servers only log it.
@@ -1003,7 +1159,7 @@ async fn dial_tunnelled(
     .map_err(|_| anyhow!("SSH connection timed out (10 s)"))?
     .with_context(|| format!("open tunnel to {}:{}", host.hostname, host.port))?;
 
-    let (handler, link) = known_hosts_handler(host, lends_agent);
+    let (handler, link) = known_hosts_handler(host, lends_agent, remote_forwards);
     let handle = time::timeout(
         CONNECT_TIMEOUT,
         client::connect_stream(client_config(host), channel.into_stream(), handler),
@@ -1022,7 +1178,11 @@ async fn dial_tunnelled(
 /// The host-key verifier for `host`, and what it will report about the
 /// connection. The lookup uses the target's own hostname/port even over a
 /// tunnel, so `known_hosts` entries match what an `ssh -J` would record.
-fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Link) {
+fn known_hosts_handler(
+    host: &Host,
+    lends_agent: bool,
+    remote_forwards: RemoteForwardTable,
+) -> (KnownHostsHandler, Link) {
     let (ended_tx, ended) = watch::channel(());
     let link = Link {
         hung_up: Arc::new(AtomicBool::new(false)),
@@ -1041,6 +1201,7 @@ fn known_hosts_handler(host: &Host, lends_agent: bool) -> (KnownHostsHandler, Li
         new_key: Arc::clone(&link.new_key),
         refusal: Arc::clone(&link.refusal),
         lends_agent,
+        remote_forwards,
         ended: ended_tx,
     };
     (handler, link)
@@ -1097,7 +1258,10 @@ where
     };
     let saved = match passwords {
         Passwords::KeysOnly => None,
-        _ => host.password.clone(),
+        _ => host
+            .password
+            .clone()
+            .filter(|p| !crate::config::vault::is_encrypted(p)),
     }
     .filter(|p| typed.as_ref() != Some(p));
     let known = typed.is_some() || saved.is_some();
@@ -2264,7 +2428,7 @@ mod tests {
         for e in others {
             assert_eq!(dial_error(&e), e.to_string());
         }
-        let (_, link) = known_hosts_handler(&Host::default(), false);
+        let (_, link) = known_hosts_handler(&Host::default(), false, Arc::default());
         let refused = link.connect_error(russh::Error::IO(ErrorKind::ConnectionRefused.into()));
         assert_eq!(
             format!("{refused:#}"),

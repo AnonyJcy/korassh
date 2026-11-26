@@ -10,6 +10,8 @@
 pub mod app_config;
 pub mod snippets;
 pub mod ssh_config;
+pub mod sync;
+pub mod vault;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -44,14 +46,46 @@ pub fn load_hosts() -> anyhow::Result<Vec<Host>> {
     let content = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
 
-    let file: HostsFile =
+    let mut file: HostsFile =
         toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))?;
+
+    let mut migrated = false;
+    if let Ok(v) = vault::VaultDir::default_dir() {
+        for h in &mut file.hosts {
+            if let Some(ref raw_pw) = h.password {
+                if !raw_pw.is_empty() {
+                    if !vault::is_encrypted(raw_pw) {
+                        migrated = true;
+                    } else if let Ok(Some(plain)) = v.try_decrypt_secret(raw_pw) {
+                        h.password = Some(plain);
+                    }
+                }
+            }
+            if let Some(ref mut proxy) = h.proxy {
+                if let Some(ref raw_pw) = proxy.password {
+                    if !raw_pw.is_empty() {
+                        if !vault::is_encrypted(raw_pw) {
+                            migrated = true;
+                        } else if let Ok(Some(plain)) = v.try_decrypt_secret(raw_pw) {
+                            proxy.password = Some(plain);
+                        }
+                    }
+                }
+            }
+        }
+        // Automatically migrate legacy plaintext passwords in hosts.toml when vault is unlocked.
+        if migrated && v.status().unlocked {
+            if let Err(e) = save_hosts(&file.hosts) {
+                tracing::warn!("Failed to migrate plaintext passwords in hosts.toml: {e}");
+            }
+        }
+    }
 
     Ok(file.hosts)
 }
 
 /// Persists the manually-added hosts (source == `Manual`) to
-/// `~/.config/omnyssh/hosts.toml`.
+/// `~/.config/omnyssh/hosts.toml`, encrypting passwords via the local vault.
 ///
 /// SSH-config-derived hosts are intentionally **not** written — they are
 /// re-imported from `~/.ssh/config` on every startup.
@@ -67,11 +101,27 @@ pub fn save_hosts(hosts: &[Host]) -> anyhow::Result<()> {
 
     let path = dir.join("hosts.toml");
 
-    let manual: Vec<Host> = hosts
+    let v = vault::VaultDir::new(dir);
+    let mut manual: Vec<Host> = hosts
         .iter()
         .filter(|h| h.source == HostSource::Manual)
         .cloned()
         .collect();
+
+    for h in &mut manual {
+        if let Some(ref pw) = h.password {
+            if !pw.is_empty() && !vault::is_encrypted(pw) {
+                h.password = Some(v.encrypt_secret(pw)?);
+            }
+        }
+        if let Some(ref mut proxy) = h.proxy {
+            if let Some(ref pw) = proxy.password {
+                if !pw.is_empty() && !vault::is_encrypted(pw) {
+                    proxy.password = Some(v.encrypt_secret(pw)?);
+                }
+            }
+        }
+    }
 
     let file = HostsFile { hosts: manual };
     let content = toml::to_string_pretty(&file).context("Failed to serialise hosts")?;

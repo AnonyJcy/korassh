@@ -1171,6 +1171,7 @@ mod tests {
             size: 14,
             is_dir,
             modified: Some(1_700_000_000),
+            permissions: None,
         };
         let panel = FilePanelView {
             entries: vec![
@@ -1206,6 +1207,7 @@ mod tests {
             size,
             is_dir: false,
             modified: None,
+            permissions: None,
         }
     }
 
