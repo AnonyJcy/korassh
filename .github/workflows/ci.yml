@@ -149,6 +149,46 @@ jobs:
       - name: Run tests
         run: cargo test -p korassh-gui
 
+  # The end-to-end suite drives the built app in headless Chromium with the Tauri
+  # boundary stubbed — the same static bundle the desktop shell serves. It is the
+  # only gate that exercises whole flows (spawn, type, transfer, quit) through the
+  # real components, so it runs on its own rather than widening the GUI job.
+  e2e:
+    name: GUI end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/korassh-gui/ui/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: crates/korassh-gui/ui
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: crates/korassh-gui/ui
+        run: npx playwright install --with-deps chromium
+
+      # `webServer` builds the app and serves it on :4173 (playwright.config.ts).
+      - name: Run the suite
+        working-directory: crates/korassh-gui/ui
+        run: npx playwright test
+
+      - name: Keep the failure traces
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-traces
+          path: crates/korassh-gui/ui/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
   tui-build-independence:
     name: TUI builds without the GUI toolchain
     runs-on: ubuntu-latest
