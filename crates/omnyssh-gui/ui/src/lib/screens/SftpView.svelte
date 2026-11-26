@@ -12,6 +12,8 @@
   import Modal from '$lib/components/Modal.svelte';
   import Select from '$lib/components/Select.svelte';
   import SftpPane from './SftpPane.svelte';
+  import FileEditorModal from './FileEditorModal.svelte';
+  import { formatOctalMode } from '$lib/stores/vault';
   import type { FileEntryDto } from '$lib/bindings';
   import { sessions, type Session } from '$lib/stores/sessions';
   import {
@@ -43,6 +45,9 @@
     sftpRename,
     sftpDelete,
     sftpPreview,
+    sftpReadFile,
+    sftpWriteFile,
+    sftpChmod,
     sftpCancel,
     listLocalDir,
     listLocalRoots,
@@ -53,6 +58,8 @@
 
   let backendId = $state<number | undefined>(undefined);
   let openError = $state<string | undefined>(undefined);
+  let savingEditor = $state(false);
+  let chmodModal = $state<{ entry: FileEntryDto; value: string; error?: string } | null>(null);
   let destroyed = false;
   let mirrored: string | undefined;
 
@@ -692,6 +699,60 @@
     if (backendId != null) sftp.clearPreview(backendId);
   }
 
+  function editRemoteFile(entry: FileEntryDto): void {
+    const id = backendId;
+    if (id == null || entry.isDir) return;
+    sftp.clearPreview(id);
+    sftp.beginEdit(id, entry.path);
+    void sftpReadFile(id, entry.path).catch((err) => {
+      sftp.setEditorContent(id, entry.path, null, errMsg(err));
+    });
+  }
+
+  function saveRemoteFile(content: string): void {
+    const id = backendId;
+    if (id == null || !view?.editor) return;
+    const path = view.editor.path;
+    savingEditor = true;
+    enqueue([
+      () => {
+        sftp.pushOp(id, { kind: 'write', refresh: 'remote' });
+        void sftpWriteFile(id, path, content)
+          .then(() => {
+            savingEditor = false;
+            sftp.clearEditor(id);
+          })
+          .catch((err) => {
+            savingEditor = false;
+            onDispatchError(id)(err);
+          });
+      }
+    ]);
+  }
+
+  function openChmod(entry: FileEntryDto): void {
+    chmodModal = { entry, value: formatOctalMode(entry.permissions) };
+  }
+
+  function submitChmod(): void {
+    const id = backendId;
+    if (id == null || !chmodModal) return;
+    const raw = chmodModal.value.trim();
+    if (!/^[0-7]{3,4}$/.test(raw)) {
+      chmodModal = { ...chmodModal, error: $t('sftp.chmod_invalid') };
+      return;
+    }
+    const mode = parseInt(raw, 8);
+    const targetPath = chmodModal.entry.path;
+    chmodModal = null;
+    enqueue([
+      () => {
+        sftp.pushOp(id, { kind: 'chmod', refresh: 'remote' });
+        void sftpChmod(id, targetPath, mode).catch(onDispatchError(id));
+      }
+    ]);
+  }
+
   function transferPercent(done: number, total: number): number {
     return total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
   }
@@ -816,6 +877,8 @@
         onNavigatePath={(p) => refreshRemote(p)}
         onToggleMark={(p) => toggleMark('remote', p)}
         onPreview={guarded((e) => preview('remote', e))}
+        onEdit={guarded((e) => editRemoteFile(e))}
+        onChmod={guarded((e) => openChmod(e))}
         onDragStart={(entry, e) => startPress('remote', entry, e)}
       >
         {#snippet toolbar()}
@@ -996,7 +1059,16 @@
             .content}</pre>
       {/if}
     </div>
-    <footer class="flex justify-end border-t border-default px-5 py-3">
+    <footer class="flex justify-end gap-2 border-t border-default px-5 py-3">
+      {#if view.remote.entries.some((e) => !e.isDir && e.path === view.preview?.path)}
+        {@const previewEntry = view.remote.entries.find((e) => e.path === view.preview?.path)}
+        {#if previewEntry}
+          <Button variant="primary" onclick={() => editRemoteFile(previewEntry)}>
+            <Icon name="edit" size={14} />
+            {$t('sftp.edit_file')}
+          </Button>
+        {/if}
+      {/if}
       <button
         type="button"
         class="rounded-full px-4 py-2 text-sm text-muted transition hover:bg-surface-inset hover:text-fg"
@@ -1005,5 +1077,62 @@
         {$t('sftp.close')}
       </button>
     </footer>
+  </Modal>
+{/if}
+
+{#if active && view?.editor}
+  <FileEditorModal
+    path={view.editor.path}
+    initialContent={view.editor.content}
+    loading={view.editor.loading}
+    error={view.editor.error}
+    saving={savingEditor}
+    onSave={saveRemoteFile}
+    onClose={() => backendId != null && sftp.clearEditor(backendId)}
+  />
+{/if}
+
+{#if active && chmodModal}
+  <Modal label={$t('sftp.chmod_title')} onClose={() => (chmodModal = null)}>
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        submitChmod();
+      }}
+    >
+      <header class="border-b border-default px-5 py-3.5">
+        <h2 class="text-sm font-semibold">{$t('sftp.chmod_title')}</h2>
+        <p class="mt-0.5 truncate font-mono text-xs text-muted">{chmodModal.entry.path}</p>
+      </header>
+      <div class="space-y-2 px-5 py-4">
+        <label class="block text-xs text-muted" for="sftp-chmod-octal">{$t('sftp.chmod_octal')}</label>
+        <!-- svelte-ignore a11y_autofocus -->
+        <input
+          id="sftp-chmod-octal"
+          autofocus
+          bind:value={chmodModal.value}
+          class="{field} font-mono"
+          placeholder="0755"
+        />
+        {#if chmodModal.error}
+          <p class="text-xs text-status-crit">{chmodModal.error}</p>
+        {/if}
+      </div>
+      <footer class="flex justify-end gap-2 border-t border-default px-5 py-3">
+        <button
+          type="button"
+          class="rounded-full px-4 py-2 text-sm text-muted transition hover:bg-surface-inset hover:text-fg"
+          onclick={() => (chmodModal = null)}
+        >
+          {$t('sftp.cancel')}
+        </button>
+        <button
+          type="submit"
+          class="rounded-full bg-accent px-5 py-2 text-sm font-medium text-accent-fg transition hover:opacity-90"
+        >
+          {$t('sftp.chmod_apply')}
+        </button>
+      </footer>
+    </form>
   </Modal>
 {/if}

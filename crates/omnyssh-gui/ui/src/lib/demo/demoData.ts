@@ -17,6 +17,8 @@ export const DEMO_HOSTS: HostDto[] = [
     passwordAuthDisabled: true,
     monitoring: 'ssh',
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false
   },
@@ -31,6 +33,8 @@ export const DEMO_HOSTS: HostDto[] = [
     passwordAuthDisabled: false,
     monitoring: 'ssh',
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false
   },
@@ -45,6 +49,8 @@ export const DEMO_HOSTS: HostDto[] = [
     passwordAuthDisabled: false,
     monitoring: 'ssh',
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false
   },
@@ -59,6 +65,8 @@ export const DEMO_HOSTS: HostDto[] = [
     passwordAuthDisabled: true,
     monitoring: 'ssh',
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false
   },
@@ -73,6 +81,8 @@ export const DEMO_HOSTS: HostDto[] = [
     passwordAuthDisabled: false,
     monitoring: 'ssh',
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false
   },
@@ -88,6 +98,8 @@ export const DEMO_HOSTS: HostDto[] = [
     monitoring: 'tcpPort',
     monitorPort: 9100,
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false
   }

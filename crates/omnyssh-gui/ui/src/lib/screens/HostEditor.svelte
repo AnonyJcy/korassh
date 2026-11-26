@@ -10,7 +10,14 @@
   import Select from '$lib/components/Select.svelte';
   import { isWindows } from '$lib/platform';
   import { maskAddress, maskHostname, maskText, streamerMode } from '$lib/stores/streamer';
-  import { bracketed, emptyForwardRow, formToInput, type HostFormFields } from './hostForm';
+  import {
+    bracketed,
+    emptyForwardRow,
+    emptyRemoteForwardRow,
+    emptyDynamicForwardRow,
+    formToInput,
+    type HostFormFields
+  } from './hostForm';
   import { t } from '$lib/i18n';
 
   let {
@@ -355,29 +362,167 @@
           <p class="text-xs text-faint">
             {$t('host_editor.port_forwarding_hint')}
           </p>
-          <div class="flex items-center justify-between gap-4 pt-1">
-            <span class="text-sm text-fg">{$t('host_editor.tunnel_autostart')}</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={fields.tunnelAutostart}
-              aria-label={$t('host_editor.tunnel_autostart')}
-              onclick={() => (fields.tunnelAutostart = !fields.tunnelAutostart)}
-              class="relative h-6 w-11 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus {fields.tunnelAutostart
-                ? 'bg-accent'
-                : 'bg-surface-inset'}"
-            >
-              <span
-                class="absolute top-0.5 h-5 w-5 rounded-full bg-surface shadow-soft transition-[left] {fields.tunnelAutostart
-                  ? 'left-[1.375rem]'
-                  : 'left-0.5'}"
-              ></span>
-            </button>
-          </div>
         {:else}
           <p class="text-xs text-faint">
             {$t('host_editor.port_forwarding_empty')}
           </p>
+        {/if}
+      </div>
+
+      <!-- Remote reverse forwarding (`ssh -R`) -->
+      <div class="space-y-2 border-t border-default pt-3.5">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <span class="text-xs font-medium text-muted">{$t('host.remote_forwards')}</span>
+            <p class="text-[11px] text-faint">{$t('host.remote_forwards_desc')}</p>
+          </div>
+          <button
+            type="button"
+            class={smallBtn}
+            onclick={() => {
+              fields.remoteForwards = [...(fields.remoteForwards ?? []), emptyRemoteForwardRow()];
+            }}
+          >
+            <Icon name="plus" size={12} />
+            {$t('host.add_remote_forward')}
+          </button>
+        </div>
+        {#if (fields.remoteForwards ?? []).length}
+          {#each fields.remoteForwards ?? [] as row, i (i)}
+            <div class={forwardGrid}>
+              <input
+                bind:value={row.remote}
+                class="{field} font-mono"
+                placeholder={$t('host.remote_port_placeholder')}
+              />
+              <input
+                bind:value={row.localHost}
+                class="{field} font-mono"
+                placeholder={$t('host.local_host_placeholder')}
+              />
+              <input
+                bind:value={row.localPort}
+                inputmode="numeric"
+                class="{field} font-mono"
+                placeholder={$t('host.local_port_placeholder')}
+              />
+              <button
+                type="button"
+                class="grid h-7 w-7 place-items-center rounded-lg text-muted transition hover:bg-surface-inset hover:text-fg"
+                onclick={() => fields.remoteForwards?.splice(i, 1)}
+              >
+                <Icon name="close" size={13} />
+              </button>
+            </div>
+          {/each}
+        {/if}
+      </div>
+
+      <!-- Dynamic SOCKS5 forwarding (`ssh -D`) -->
+      <div class="space-y-2 border-t border-default pt-3.5">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <span class="text-xs font-medium text-muted">{$t('host.dynamic_forwards')}</span>
+            <p class="text-[11px] text-faint">{$t('host.dynamic_forwards_desc')}</p>
+          </div>
+          <button
+            type="button"
+            class={smallBtn}
+            onclick={() => {
+              fields.dynamicForwards = [...(fields.dynamicForwards ?? []), emptyDynamicForwardRow()];
+            }}
+          >
+            <Icon name="plus" size={12} />
+            {$t('host.add_dynamic_forward')}
+          </button>
+        </div>
+        {#if (fields.dynamicForwards ?? []).length}
+          {#each fields.dynamicForwards ?? [] as row, i (i)}
+            <div class="flex items-center gap-2">
+              <input
+                bind:value={row.listen}
+                class="{field} flex-1 font-mono"
+                placeholder={$t('host.dynamic_port_placeholder')}
+              />
+              <button
+                type="button"
+                class="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-muted transition hover:bg-surface-inset hover:text-fg"
+                onclick={() => fields.dynamicForwards?.splice(i, 1)}
+              >
+                <Icon name="close" size={13} />
+              </button>
+            </div>
+          {/each}
+        {/if}
+      </div>
+
+      {#if fields.forwards.length || (fields.remoteForwards ?? []).length || (fields.dynamicForwards ?? []).length}
+        <div class="flex items-center justify-between gap-4 pt-1">
+          <span class="text-sm text-fg">{$t('host_editor.tunnel_autostart')}</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={fields.tunnelAutostart}
+            aria-label={$t('host_editor.tunnel_autostart')}
+            onclick={() => (fields.tunnelAutostart = !fields.tunnelAutostart)}
+            class="relative h-6 w-11 shrink-0 rounded-full transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus {fields.tunnelAutostart
+              ? 'bg-accent'
+              : 'bg-surface-inset'}"
+          >
+            <span
+              class="absolute top-0.5 h-5 w-5 rounded-full bg-surface shadow-soft transition-[left] {fields.tunnelAutostart
+                ? 'left-[1.375rem]'
+                : 'left-0.5'}"
+            ></span>
+          </button>
+        </div>
+      {/if}
+
+      <!-- Upstream HTTP / SOCKS5 proxy -->
+      <div class="space-y-2.5 border-t border-default pt-3.5">
+        <div class="flex items-center justify-between gap-3">
+          <span class="text-xs font-medium text-muted">{$t('host.proxy')}</span>
+          <div class="flex gap-1 rounded-xl bg-surface-inset p-1">
+            {#each (['none', 'http', 'socks5'] as const) as pk (pk)}
+              <button
+                type="button"
+                class="rounded-lg px-2.5 py-1 text-xs transition {(fields.proxyKind ?? 'none') === pk
+                  ? 'bg-accent text-accent-fg'
+                  : 'text-muted hover:text-fg'}"
+                onclick={() => (fields.proxyKind = pk)}
+              >
+                {$t(`host.proxy_${pk}`)}
+              </button>
+            {/each}
+          </div>
+        </div>
+        {#if fields.proxyKind && fields.proxyKind !== 'none'}
+          <div class="grid grid-cols-[1fr_6rem] gap-2">
+            <input
+              bind:value={fields.proxyHost}
+              class="{field} font-mono"
+              placeholder={$t('host.proxy_host')}
+            />
+            <input
+              bind:value={fields.proxyPort}
+              inputmode="numeric"
+              class="{field} font-mono"
+              placeholder={$t('host.proxy_port')}
+            />
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <input
+              bind:value={fields.proxyUser}
+              class={field}
+              placeholder={$t('host.proxy_user')}
+            />
+            <input
+              bind:value={fields.proxyPassword}
+              type="password"
+              class={field}
+              placeholder={fields.proxyHasAuth ? $t('host.proxy_pass_keep') : $t('host.proxy_pass')}
+            />
+          </div>
         {/if}
       </div>
 

@@ -4,6 +4,7 @@
 import { get } from 'svelte/store';
 import type {
   ConnectionStatusDto,
+  FileContentReady,
   FilePreview,
   HostDto,
   KeyPassphraseRequired,
@@ -142,6 +143,10 @@ export function applySftpDisconnected(payload: SftpDisconnected): void {
 
 export function applyFilePreview(payload: FilePreview): void {
   sftp.setPreview(payload.sessionId, { path: payload.path, content: payload.content });
+}
+
+export function applyFileContentReady(payload: FileContentReady): void {
+  sftp.setEditorContent(payload.sessionId, payload.path, payload.content, payload.error);
 }
 
 export function applyTransferProgress(payload: TransferProgressDto): void {

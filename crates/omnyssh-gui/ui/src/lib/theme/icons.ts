@@ -36,4 +36,15 @@ export type IconName =
   | 'tunnel'
   | 'layers'
   | 'chevron'
-  | 'grip';
+  | 'grip'
+  | 'splitH'
+  | 'splitV'
+  | 'copy'
+  | 'lock'
+  | 'record'
+  | 'sparkles'
+  | 'sync'
+  | 'sidebar'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'save';

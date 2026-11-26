@@ -13,8 +13,9 @@
     label,
     onClose,
     backdropCloses = true,
+    wide = false,
     children
-  }: { label: string; onClose: () => void; backdropCloses?: boolean; children: Snippet } = $props();
+  }: { label: string; onClose: () => void; backdropCloses?: boolean; wide?: boolean; children: Snippet } = $props();
 
   // Dialogs can stack (the passphrase prompt opens on its own over any other):
   // Escape closes only the top one, and the one opened last is drawn on top.
@@ -49,7 +50,7 @@
   ></button>
 
   <div
-    class="relative flex max-h-[76vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-default bg-surface-raised shadow-soft"
+    class="relative flex max-h-[76vh] w-full {wide ? 'max-w-3xl' : 'max-w-lg'} flex-col overflow-hidden rounded-2xl border border-default bg-surface-raised shadow-soft"
   >
     {@render children()}
   </div>

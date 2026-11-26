@@ -53,6 +53,8 @@ function host(hostname: string, localForwards: HostDto['localForwards'] = []): H
     hasKey: false,
     monitoring: 'ssh',
     localForwards,
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false
   };

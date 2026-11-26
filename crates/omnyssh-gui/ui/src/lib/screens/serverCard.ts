@@ -5,10 +5,12 @@
 import { derived } from 'svelte/store';
 import type {
   ConnectionStatusDto,
+  DynamicForwardDto,
   HostDto,
   LocalForwardDto,
   MetricsDto,
   ProcessDto,
+  RemoteForwardDto,
   ServiceDto,
   ServiceKindDto,
   TunnelStatusDto
@@ -61,6 +63,8 @@ export interface ServerCard {
 
 export interface CardTunnel {
   forwards: LocalForwardDto[];
+  remoteForwards: RemoteForwardDto[];
+  dynamicForwards: DynamicForwardDto[];
   /** Connecting, up or retrying — what a Stop button stops. */
   running: boolean;
   dot: Status;
@@ -72,8 +76,17 @@ export interface CardTunnel {
 
 /** A host's tunnel as its card shows it; `undefined` when it has no forwards. */
 export function deriveTunnel(host: HostDto, status: TunnelStatusDto | undefined): CardTunnel | undefined {
-  if (host.localForwards.length === 0) return undefined;
-  const base = { forwards: host.localForwards, autostart: host.tunnelAutostart };
+  const remoteForwards = host.remoteForwards ?? [];
+  const dynamicForwards = host.dynamicForwards ?? [];
+  if (host.localForwards.length === 0 && remoteForwards.length === 0 && dynamicForwards.length === 0) {
+    return undefined;
+  }
+  const base = {
+    forwards: host.localForwards,
+    remoteForwards,
+    dynamicForwards,
+    autostart: host.tunnelAutostart
+  };
   switch (status?.kind) {
     case 'connecting':
       return { ...base, running: true, dot: 'unknown', label: 'Connecting…' };

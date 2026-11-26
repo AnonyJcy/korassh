@@ -910,9 +910,24 @@
           <ul class="space-y-1">
             {#each tunnel.forwards as forward, f (f)}
               <li class="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted">
+                <span class="shrink-0 text-[10px] text-faint">-L</span>
                 <span class="truncate">{forwardListen(forward, $streamerMode)}</span>
                 <span class="shrink-0 text-faint">→</span>
                 <span class="truncate">{forwardTarget(forward, $streamerMode)}</span>
+              </li>
+            {/each}
+            {#each tunnel.remoteForwards as rf, f (f)}
+              <li class="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted">
+                <span class="shrink-0 text-[10px] text-faint">-R</span>
+                <span class="truncate">{rf.bindAddress ? `${rf.bindAddress}:${rf.remotePort}` : rf.remotePort}</span>
+                <span class="shrink-0 text-faint">←</span>
+                <span class="truncate">{rf.localHost}:{rf.localPort}</span>
+              </li>
+            {/each}
+            {#each tunnel.dynamicForwards as df, f (f)}
+              <li class="flex min-w-0 items-center gap-1.5 font-mono text-xs text-muted">
+                <span class="shrink-0 text-[10px] text-faint">-D</span>
+                <span class="truncate">SOCKS5 {df.bindAddress ?? 'localhost'}:{df.bindPort}</span>
               </li>
             {/each}
           </ul>

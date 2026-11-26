@@ -6,6 +6,7 @@
   import { onMount, onDestroy } from 'svelte';
   import type { ISearchOptions, SearchAddon } from '@xterm/addon-search';
   import { theme } from '$lib/stores/theme';
+  import { terminalPrefs } from '$lib/stores/terminalPrefs';
   import { lastError } from '$lib/stores/notifications';
   import { searchColours } from '$lib/theme/terminalTheme';
   import Icon from '$lib/theme/Icon.svelte';
@@ -41,7 +42,7 @@
       result = { kind: 'idle' };
       return;
     }
-    const key = `${caseSensitive}|${regex}|${$theme}`;
+    const key = `${caseSensitive}|${regex}|${$theme}|${$terminalPrefs.colorScheme}`;
     if (key !== drawnWith) {
       search.clearDecorations();
       drawnWith = key;
@@ -50,7 +51,7 @@
       caseSensitive,
       regex,
       incremental,
-      decorations: searchColours($theme)
+      decorations: searchColours($theme, $terminalPrefs.colorScheme)
     };
     try {
       if (backwards) search.findPrevious(query, options);

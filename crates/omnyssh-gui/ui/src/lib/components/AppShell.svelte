@@ -12,6 +12,7 @@
   import PassphrasePrompt from '$lib/screens/PassphrasePrompt.svelte';
   import PasswordPrompt from '$lib/screens/PasswordPrompt.svelte';
   import UpdateBanner from './UpdateBanner.svelte';
+  import VaultUnlockBanner from './VaultUnlockBanner.svelte';
   import { support } from '$lib/stores/support';
   import { get } from 'svelte/store';
   import {
@@ -76,8 +77,11 @@
        (--titlebar-h, app.css). Sits below the z-40/z-50 overlays so they stay usable. -->
   <div data-tauri-drag-region class="absolute inset-x-0 top-0 z-20 h-[var(--titlebar-h)]"></div>
   <Sidebar />
-  <main class="col-start-2 row-start-1 min-h-0 overflow-hidden">
-    {@render children()}
+  <main class="col-start-2 row-start-1 flex min-h-0 flex-col overflow-hidden">
+    <VaultUnlockBanner />
+    <div class="relative min-h-0 flex-1 overflow-hidden">
+      {@render children()}
+    </div>
   </main>
   <StatusBar />
   <CommandPalette />

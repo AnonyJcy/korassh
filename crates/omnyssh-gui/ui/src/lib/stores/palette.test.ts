@@ -15,6 +15,8 @@ function host(name: string, extra: Partial<HostDto> = {}): HostDto {
     hasKey: false,
     monitoring: 'ssh',
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false,
     ...extra
@@ -31,7 +33,7 @@ describe('paletteItems — filter & sections', () => {
 
   it('navigator lists sessions first, then hosts, then commands', () => {
     const items = paletteItems('navigate', hosts, sessions, '');
-    expect(items.map((i) => i.kind)).toEqual(['session', 'session', 'host', 'host', 'host', 'command']);
+    expect(items.map((i) => i.kind)).toEqual(['session', 'session', 'host', 'host', 'host', 'command', 'command']);
   });
 
   it('matches the streamer command by its label, in the navigator only', () => {
@@ -78,7 +80,7 @@ describe('paletteItems — filter & sections', () => {
   });
 
   it('an empty query keeps everything', () => {
-    expect(paletteItems('navigate', hosts, sessions, '   ')).toHaveLength(6);
+    expect(paletteItems('navigate', hosts, sessions, '   ')).toHaveLength(7);
   });
 
   it('lists a shared host name once, as its first host, whatever the query', () => {
@@ -119,7 +121,7 @@ describe('paletteSignature — stable across volatile updates', () => {
   it('changes when the query drops the command row', () => {
     const all = paletteItems('navigate', [host('web-1')], [], '');
     const hostOnly = paletteItems('navigate', [host('web-1')], [], 'web');
-    expect(paletteSignature(all)).toBe(`h:web-1\u0000c:toggle-streamer`);
+    expect(paletteSignature(all)).toBe(`h:web-1\u0000c:toggle-streamer\u0000c:new-local-shell`);
     expect(paletteSignature(hostOnly)).toBe('h:web-1');
   });
 });

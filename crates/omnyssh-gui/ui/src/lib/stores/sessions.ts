@@ -24,6 +24,8 @@ export interface Session {
   kind: SessionKind;
   hostName: string;
   status: SessionStatus;
+  /** True when this terminal tab runs a local OS shell instead of an SSH host. */
+  isLocal?: boolean;
   /** The backend public session id, set once `terminal_open` resolves (tech-gui.md
    *  §3.4). Undefined while connecting; the id crossing IPC is always this public id. */
   termId?: number;
@@ -46,8 +48,14 @@ function createSessions() {
   let nextId = 1;
   return {
     subscribe,
-    spawn(kind: SessionKind, hostName: string): Session {
-      const session: Session = { id: nextId++, kind, hostName, status: 'connecting' };
+    spawn(kind: SessionKind, hostName: string, opts?: { isLocal?: boolean }): Session {
+      const session: Session = {
+        id: nextId++,
+        kind,
+        hostName,
+        status: 'connecting',
+        ...(opts?.isLocal ? { isLocal: true } : {})
+      };
       update((list) => [...list, session]);
       return session;
     },

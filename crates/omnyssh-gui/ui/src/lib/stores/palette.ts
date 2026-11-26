@@ -17,9 +17,16 @@ export type PaletteItem =
   | { kind: 'host'; host: HostDto }
   | CommandItem;
 
-type CommandItem = { kind: 'command'; id: 'toggle-streamer'; label: string };
+type CommandItem = {
+  kind: 'command';
+  id: 'toggle-streamer' | 'new-local-shell';
+  label: string;
+};
 
-const COMMANDS: CommandItem[] = [{ kind: 'command', id: 'toggle-streamer', label: 'Toggle streamer mode' }];
+const COMMANDS: CommandItem[] = [
+  { kind: 'command', id: 'toggle-streamer', label: 'Toggle streamer mode' },
+  { kind: 'command', id: 'new-local-shell', label: 'New local shell' }
+];
 
 function hostHaystack(h: HostDto): string {
   return `${h.name} ${h.hostname} ${h.user} ${h.tags.join(' ')}`.toLowerCase();
@@ -57,9 +64,10 @@ export function paletteItems(
   const sessionRows: PaletteItem[] = sessions
     .filter((s) => matches(sessionHaystack(s), query))
     .map((session) => ({ kind: 'session', session }));
-  const commandRows = COMMANDS.filter((c) =>
-    matches(`${c.label} ${translate(currentLocale, 'palette.toggle_streamer')}`.toLowerCase(), query)
-  );
+  const commandRows = COMMANDS.filter((c) => {
+    const i18nKey = c.id === 'toggle-streamer' ? 'palette.toggle_streamer' : 'palette.new_local_shell';
+    return matches(`${c.label} ${translate(currentLocale, i18nKey)}`.toLowerCase(), query);
+  });
   return [...sessionRows, ...hostRows, ...commandRows];
 }
 

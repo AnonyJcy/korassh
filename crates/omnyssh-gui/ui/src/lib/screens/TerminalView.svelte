@@ -13,26 +13,41 @@
   import { Channel } from '@tauri-apps/api/core';
   import { theme } from '$lib/stores/theme';
   import { fontPrefs, resolveTerminalFontStack } from '$lib/stores/font';
+  import { terminalPrefs } from '$lib/stores/terminalPrefs';
   import { xtermTheme } from '$lib/theme/terminalTheme';
   import { sessions, type Session } from '$lib/stores/sessions';
-  import { closeSession } from '$lib/stores/navigation';
+  import { snippets } from '$lib/stores/snippets';
+  import { splitLayout } from '$lib/stores/layout';
+  import { closeSession, duplicateSession, splitWithDuplicate } from '$lib/stores/navigation';
   import { terminalDidExit } from '$lib/ipc/router';
   import { lastError } from '$lib/stores/notifications';
   import { dialogs } from '$lib/stores/dialogs';
   import { palette } from '$lib/stores/palette';
   import { isStreamerChord } from '$lib/stores/ui';
   import { activeEntity } from '$lib/stores/activeEntity';
+  import { streamerMode, displayHostTitle } from '$lib/stores/streamer';
+  import { openExternal } from '$lib/ipc/openExternal';
+  import { Icon } from '$lib/theme';
   import { t } from '$lib/i18n';
   import {
     terminalOpen,
+    terminalOpenLocal,
     terminalWrite,
     terminalResize,
     terminalClose,
     terminalPaste,
     clipboardReadText,
-    clipboardWriteText
+    clipboardWriteText,
+    listSnippets,
+    saveTextFile
   } from '$lib/ipc/commands';
   import { shouldFadeTop } from './terminalFade';
+  import {
+    applyKeywordHighlights,
+    compileHighlightRules,
+    stripAnsi,
+    type CompiledHighlightRule
+  } from './terminalHighlight';
   import {
     bufferText,
     chunkBytes,
@@ -51,12 +66,27 @@
   } from './terminalInput';
   import { HIGHLIGHT_LIMIT, seedQuery } from './terminalFind';
   import TerminalFind from './TerminalFind.svelte';
+  import TerminalSftpDrawer from './TerminalSftpDrawer.svelte';
   import { clipboardPrefs } from '$lib/stores/clipboard';
   import Modal from '$lib/components/Modal.svelte';
   import { isMac, isWindows } from '$lib/platform';
-  import type { TerminalBytes } from '$lib/bindings';
+  import type { SnippetDto, TerminalBytes } from '$lib/bindings';
 
-  let { session, active }: { session: Session; active: boolean } = $props();
+  let {
+    session,
+    active,
+    paneClass = 'inset-0',
+    focused = true,
+    isSplit = false,
+    onPaneFocus
+  }: {
+    session: Session;
+    active: boolean;
+    paneClass?: string;
+    focused?: boolean;
+    isSplit?: boolean;
+    onPaneFocus?: () => void;
+  } = $props();
 
   // The Nerd Font families come after the generic `monospace`, not merely after the
   // named system ones: the named list is macOS/Windows-only, so on a Linux desktop a
@@ -73,6 +103,7 @@
     '"FiraCode Nerd Font Mono", "FiraCode Nerd Font"';
   // One encoder for the keystroke hot path instead of one per input event.
   const ENCODER = new TextEncoder();
+  const DECODER = new TextDecoder('utf-8', { fatal: false });
 
   // A large paste arrives as one onData; sending it as a single number[] would freeze
   // the UI thread (§9). Split into bounded chunks and await each so paint yields between
@@ -119,8 +150,160 @@
   let ready = $state(false);
   let themeUnsub: (() => void) | undefined;
   let fontUnsub: (() => void) | undefined;
+  let prefsUnsub: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let fitScheduled = false;
+  let sftpDrawerOpen = $state(false);
+  let quickBarOpen = $state(false);
+  let quickFilter = $state('');
+  let recording = $state(false);
+  let recordedChunks: string[] = [];
+  let reconnecting = $state(false);
+  let compiledHighlights: CompiledHighlightRule[] = [];
+  let highlightActive = $state(terminalPrefs.get().highlightEnabled);
+  let paramPrompt = $state<{ snippet: SnippetDto; values: Record<string, string> } | null>(null);
+
+  const sessionEnded = $derived(session.status === 'closed' || session.status === 'failed');
+
+  const quickSnippets = $derived.by(() => {
+    const q = quickFilter.trim().toLowerCase();
+    return $snippets.filter((s) => {
+      if (s.scope === 'host' && s.host && s.host !== session.hostName) return false;
+      if (q && !`${s.name} ${s.command}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  });
+
+  function onWheel(e: WheelEvent): void {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    e.preventDefault();
+    terminalPrefs.zoom(e.deltaY < 0 ? 1 : -1);
+  }
+
+  function sendQuickSnippet(snippet: SnippetDto): void {
+    const params = snippet.params?.filter(Boolean) ?? [];
+    if (params.length > 0) {
+      const values: Record<string, string> = {};
+      for (const p of params) values[p] = '';
+      paramPrompt = { snippet, values };
+      return;
+    }
+    sendInput(ENCODER.encode(`${snippet.command}\r`));
+    flash($t('terminal.quick_commands_sent', { name: snippet.name }));
+    term?.focus();
+  }
+
+  function submitParamSnippet(): void {
+    if (!paramPrompt) return;
+    let cmd = paramPrompt.snippet.command;
+    for (const [k, v] of Object.entries(paramPrompt.values)) {
+      cmd = cmd.replaceAll(`{{${k}}}`, v);
+    }
+    const name = paramPrompt.snippet.name;
+    paramPrompt = null;
+    sendInput(ENCODER.encode(`${cmd}\r`));
+    flash($t('terminal.quick_commands_sent', { name }));
+    term?.focus();
+  }
+
+  async function toggleRecording(): Promise<void> {
+    if (!recording) {
+      recordedChunks = [];
+      recording = true;
+      return;
+    }
+    recording = false;
+    const text = recordedChunks.join('');
+    recordedChunks = [];
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const safeHost = session.hostName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const fileName = `${safeHost}-${stamp}.log`;
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      try {
+        const savedPath = await saveTextFile(fileName, text);
+        flash($t('terminal.log_saved', { path: savedPath }));
+      } catch (err) {
+        lastError.set(err instanceof Error ? err.message : String(err));
+      }
+    } else {
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      flash($t('terminal.log_downloaded'));
+    }
+  }
+
+  async function openBackendPty(): Promise<void> {
+    if (!term || destroyed) return;
+    if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
+      ready = true;
+      return;
+    }
+    connected = false;
+    sessions.setStatus(session.id, 'connecting');
+    const channel = new Channel<TerminalBytes>();
+    channel.onmessage = (msg) => {
+      if (!term) return;
+      if (!connected) {
+        connected = true;
+        if (!ended()) sessions.setStatus(session.id, 'connected');
+      }
+      const bytes = new Uint8Array(msg as unknown as ArrayBuffer);
+      const shouldHighlight =
+        highlightActive &&
+        compiledHighlights.length > 0 &&
+        term.buffer.active.type === 'normal';
+      if (recording || shouldHighlight) {
+        const decoded = DECODER.decode(bytes, { stream: true });
+        if (recording) recordedChunks.push(stripAnsi(decoded));
+        if (shouldHighlight) {
+          term.write(applyKeywordHighlights(decoded, compiledHighlights), syncScrolled);
+          return;
+        }
+      }
+      term.write(bytes, syncScrolled);
+    };
+
+    const id = session.isLocal
+      ? await terminalOpenLocal(term.cols || 80, term.rows || 24, channel)
+      : await terminalOpen(session.hostName, term.cols || 80, term.rows || 24, channel);
+    if (destroyed) {
+      void terminalClose(id).catch(() => {});
+      return;
+    }
+    termId = id;
+    sessions.setTermId(session.id, id);
+    const exited = terminalDidExit(id);
+    if (exited === false) {
+      closeSession(session.id);
+      return;
+    }
+    if (exited) sessions.setStatus(session.id, 'closed');
+  }
+
+  async function reconnect(): Promise<void> {
+    if (reconnecting || !term) return;
+    reconnecting = true;
+    try {
+      if (termId != null) {
+        void terminalClose(termId).catch(() => {});
+        termId = undefined;
+      }
+      term.write('\r\n\x1b[2m--- Reconnecting... ---\x1b[0m\r\n');
+      await openBackendPty();
+      safeFit();
+      term.focus();
+    } catch (err) {
+      lastError.set(err instanceof Error ? err.message : String(err));
+      sessions.setStatus(session.id, 'failed');
+    } finally {
+      reconnecting = false;
+    }
+  }
   // The top-edge fade dissolves scrolled output into the top edge, but never the live
   // prompt: after `clear`/Ctrl+L the cursor homes to the top, so the fade must lift
   // there (see terminalFade). Recomputed after every write too, since those resets
@@ -367,18 +550,22 @@
 
   onMount(() => {
     void (async () => {
-      const [{ Terminal }, { FitAddon }, { SearchAddon }] = await Promise.all([
+      const [{ Terminal }, { FitAddon }, { SearchAddon }, { WebLinksAddon }] = await Promise.all([
         import('@xterm/xterm'),
         import('@xterm/addon-fit'),
-        import('@xterm/addon-search')
+        import('@xterm/addon-search'),
+        import('@xterm/addon-web-links')
       ]);
       if (destroyed) return;
 
+      const initPrefs = terminalPrefs.get();
       term = new Terminal({
         fontFamily: resolveTerminalFontStack(fontPrefs.get(), MONO),
-        fontSize: 13,
-        cursorBlink: true,
-        scrollback: 5000,
+        fontSize: initPrefs.fontSize,
+        lineHeight: initPrefs.lineHeight,
+        cursorStyle: initPrefs.cursorStyle,
+        cursorBlink: initPrefs.cursorBlink,
+        scrollback: initPrefs.scrollback,
         // The search addon highlights matches through registerDecoration, which xterm
         // still gates as proposed API.
         allowProposedApi: true,
@@ -391,6 +578,11 @@
       const search = new SearchAddon({ highlightLimit: HIGHLIGHT_LIMIT });
       term.loadAddon(search);
       searchAddon = search;
+      term.loadAddon(
+        new WebLinksAddon((_event, uri) => {
+          void openExternal(uri);
+        })
+      );
       term.open(container);
       term.onScroll(syncScrolled);
       term.onSelectionChange(() => (autoCopied = false));
@@ -399,14 +591,13 @@
       container.addEventListener('mouseup', onMiddleUp, true);
       container.addEventListener('auxclick', onMiddleUp, true);
       container.addEventListener('paste', onNativePaste, true);
+      container.addEventListener('wheel', onWheel, { passive: false });
       window.addEventListener('keydown', onMenuKey, true);
       window.addEventListener('mousedown', onMenuOutside, true);
 
-      // The #1 theme-regression guard (§5.1): push the matching xterm theme to this
-      // terminal — including already-open ones — whenever the store flips. Its
-      // synchronous first call (pre-paint) also sets the initial theme.
-      themeUnsub = theme.subscribe((t) => {
-        if (term) term.options.theme = xtermTheme(t);
+      // Keep xterm theme, font, zoom, cursor, scrollback, and keyword highlights live-synced.
+      themeUnsub = theme.subscribe((appTheme) => {
+        if (term) term.options.theme = xtermTheme(appTheme, terminalPrefs.get().colorScheme);
       });
       let firstFontSync = true;
       fontUnsub = fontPrefs.subscribe((prefs) => {
@@ -418,47 +609,57 @@
         }
         firstFontSync = false;
       });
-
-      // Fit before opening so the remote PTY starts at the visible size.
-      safeFit();
-      if (typeof window !== 'undefined' && !('__TAURI_INTERNALS__' in window)) {
-        ready = true;
-        return;
-      }
-
-      // Route raw output into xterm. The channel is typed `number[]`, but the raw path
-      // actually delivers an `ArrayBuffer` (§3.3); `Uint8Array` wraps either.
-      const channel = new Channel<TerminalBytes>();
-      channel.onmessage = (msg) => {
+      let firstPrefsSync = true;
+      prefsUnsub = terminalPrefs.subscribe((prefs) => {
+        highlightActive = prefs.highlightEnabled;
+        compiledHighlights = compileHighlightRules(prefs.highlightRules);
         if (!term) return;
-        if (!connected) {
-          connected = true;
-          // A large first chunk travels asynchronously and can land after the exit.
-          if (!ended()) sessions.setStatus(session.id, 'connected');
-        }
-        term.write(new Uint8Array(msg as unknown as ArrayBuffer), syncScrolled);
-      };
+        const needRefit =
+          term.options.fontSize !== prefs.fontSize || term.options.lineHeight !== prefs.lineHeight;
+        term.options.fontSize = prefs.fontSize;
+        term.options.lineHeight = prefs.lineHeight;
+        term.options.scrollback = prefs.scrollback;
+        term.options.cursorStyle = prefs.cursorStyle;
+        term.options.cursorBlink = prefs.cursorBlink;
+        term.options.theme = xtermTheme(get(theme), prefs.colorScheme);
+        if (needRefit && !firstPrefsSync) scheduleFit();
+        firstPrefsSync = false;
+      });
 
-      const id = await terminalOpen(session.hostName, term.cols || 80, term.rows || 24, channel);
-      if (destroyed) {
-        void terminalClose(id).catch(() => {});
-        return;
+      // Fit before opening so the PTY starts at the visible size.
+      safeFit();
+      await openBackendPty();
+      if (destroyed) return;
+
+      // Lazy-load snippets for the quick command bar if the store is empty.
+      if (get(snippets).length === 0 && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+        listSnippets()
+          .then((list) => snippets.set(list))
+          .catch(() => {});
       }
-      termId = id;
-      sessions.setTermId(session.id, id);
-      // The remote may have already exited before this id was recorded (fast-fail
-      // connect race): terminal-exited couldn't match the tab, so settle it now.
-      const exited = terminalDidExit(id);
-      if (exited === false) {
-        closeSession(session.id);
-        return;
-      }
-      if (exited) sessions.setStatus(session.id, 'closed');
 
       // Copy takes Ctrl+Shift+C whether or not anything is selected, so the chord never
       // reaches the shell. Returning false only keeps xterm out of it; the default is
       // ours to stop. The write happens inside the keydown, which WebKit requires.
       term.attachCustomKeyEventHandler((e) => {
+        // Zoom shortcuts: Ctrl/Cmd + = / - / 0.
+        if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.altKey) {
+          if (e.key === '=' || e.key === '+') {
+            e.preventDefault();
+            terminalPrefs.zoom(1);
+            return false;
+          }
+          if (e.key === '-') {
+            e.preventDefault();
+            terminalPrefs.zoom(-1);
+            return false;
+          }
+          if (e.key === '0') {
+            e.preventDefault();
+            terminalPrefs.resetZoom();
+            return false;
+          }
+        }
         // The streamer chord belongs to the window (AppShell), never to the shell, where
         // a ^S would stop its output.
         if (isStreamerChord(e)) return false;
@@ -534,6 +735,7 @@
     destroyed = true;
     themeUnsub?.();
     fontUnsub?.();
+    prefsUnsub?.();
     resizeObserver?.disconnect();
     window.removeEventListener('mouseup', onMouseUp);
     container?.removeEventListener('contextmenu', onContextMenu);
@@ -541,6 +743,7 @@
     container?.removeEventListener('mouseup', onMiddleUp, true);
     container?.removeEventListener('auxclick', onMiddleUp, true);
     container?.removeEventListener('paste', onNativePaste, true);
+    container?.removeEventListener('wheel', onWheel);
     window.removeEventListener('keydown', onMenuKey, true);
     window.removeEventListener('mousedown', onMenuOutside, true);
     clearTimeout(toastTimer);
@@ -562,11 +765,11 @@
 
   $effect(() => {
     if (active && ready) {
-      void [$dialogs, $palette, $activeEntity];
+      void [$dialogs, $palette, $activeEntity, sftpDrawerOpen, quickBarOpen, paneClass];
       requestAnimationFrame(() => {
         safeFit();
         // An open find bar keeps the keyboard it had when the tab was left.
-        if (keyboardFree()) {
+        if (focused && keyboardFree()) {
           if (findOpen) findBar?.focus();
           else term?.focus();
         }
@@ -574,31 +777,271 @@
       });
     }
   });
+
+  const tbBtn =
+    'inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted transition ' +
+    'hover:bg-surface-inset hover:text-fg focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus';
 </script>
 
 <!-- bg-surface fills behind the macOS traffic lights (no seam). Text selection stays
      disabled app-wide (app.css); the terminal is the one selectable surface, handled
      by xterm's own selection (not CSS). -->
-<div class="absolute inset-0 overflow-hidden bg-surface {active ? '' : 'hidden'}">
-  <!-- Inset via this wrapper, not the xterm host: padding on the element xterm mounts
-       into makes FitAddon over-size, sliding the last row under the status bar. The top
-       inset clears the macOS traffic-light strip; the bottom gap clears the footer. -->
-  <div class="h-full w-full" style="padding: max(var(--titlebar-h), 0.75rem) 0.5rem 1rem;">
-    <div bind:this={container} class="h-full w-full" class:term-fade={scrolled}></div>
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="absolute {paneClass} flex flex-col overflow-hidden bg-surface {active ? '' : 'hidden'} {isSplit && focused
+    ? 'ring-1 ring-inset ring-accent'
+    : ''}"
+  style="padding-top: var(--titlebar-h);"
+  onmousedown={() => onPaneFocus?.()}
+>
+  <!-- Compact terminal action bar -->
+  <div class="flex h-8 shrink-0 items-center justify-between gap-2 border-b border-default bg-surface px-2.5">
+    <div class="flex min-w-0 items-center gap-2">
+      <span class="truncate text-xs font-medium text-fg">
+        {session.isLocal ? $t('sidebar.local_shell') : displayHostTitle(session.hostName, $streamerMode)}
+      </span>
+      {#if recording}
+        <span class="inline-flex items-center gap-1 rounded-full bg-surface-inset px-2 py-0.5 text-[10px] font-semibold text-status-crit">
+          <span class="h-1.5 w-1.5 rounded-full bg-status-crit"></span>
+          {$t('terminal.recording_badge')}
+        </span>
+      {/if}
+      {#if sessionEnded}
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded-full bg-accent px-2.5 py-0.5 text-[11px] font-medium text-accent-fg transition hover:opacity-90"
+          disabled={reconnecting}
+          onclick={() => void reconnect()}
+        >
+          <Icon name="refresh" size={11} />
+          {$t('terminal.reconnect')}
+        </button>
+      {/if}
+    </div>
+    <div class="flex shrink-0 items-center gap-0.5">
+      <button
+        type="button"
+        class={tbBtn}
+        title={$t('terminal.reconnect')}
+        aria-label={$t('terminal.reconnect')}
+        disabled={reconnecting}
+        onclick={() => void reconnect()}
+      >
+        <Icon name="refresh" size={13} />
+      </button>
+      <button
+        type="button"
+        class={tbBtn}
+        title={$t('terminal.duplicate')}
+        aria-label={$t('terminal.duplicate')}
+        onclick={() => duplicateSession(session)}
+      >
+        <Icon name="copy" size={13} />
+      </button>
+      {#if isSplit}
+        <button
+          type="button"
+          class={tbBtn}
+          title={$t('terminal.unsplit')}
+          aria-label={$t('terminal.unsplit')}
+          onclick={() => splitLayout.unsplit()}
+        >
+          <Icon name="close" size={13} />
+        </button>
+      {:else}
+        <button
+          type="button"
+          class={tbBtn}
+          title={$t('terminal.split_horizontal')}
+          aria-label={$t('terminal.split_horizontal')}
+          onclick={() => splitWithDuplicate(session, 'horizontal')}
+        >
+          <Icon name="splitH" size={13} />
+        </button>
+        <button
+          type="button"
+          class={tbBtn}
+          title={$t('terminal.split_vertical')}
+          aria-label={$t('terminal.split_vertical')}
+          onclick={() => splitWithDuplicate(session, 'vertical')}
+        >
+          <Icon name="splitV" size={13} />
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="{tbBtn} {recording ? 'text-status-crit' : ''}"
+        title={recording ? $t('terminal.record_stop') : $t('terminal.record_start')}
+        aria-label={recording ? $t('terminal.record_stop') : $t('terminal.record_start')}
+        aria-pressed={recording}
+        onclick={() => void toggleRecording()}
+      >
+        <Icon name="record" size={13} />
+      </button>
+      <button
+        type="button"
+        class="{tbBtn} {highlightActive ? 'bg-surface-inset text-fg' : ''}"
+        title={$t('terminal.highlights_toggle')}
+        aria-label={$t('terminal.highlights_toggle')}
+        aria-pressed={highlightActive}
+        onclick={() => terminalPrefs.update({ highlightEnabled: !highlightActive })}
+      >
+        <Icon name="sparkles" size={13} />
+      </button>
+      <button
+        type="button"
+        class={tbBtn}
+        title={$t('terminal.zoom_out')}
+        aria-label={$t('terminal.zoom_out')}
+        onclick={() => terminalPrefs.zoom(-1)}
+      >
+        <Icon name="zoomOut" size={13} />
+      </button>
+      <button
+        type="button"
+        class="{tbBtn} tabular-nums"
+        title={$t('terminal.zoom_reset', { size: $terminalPrefs.fontSize })}
+        onclick={() => terminalPrefs.resetZoom()}
+      >
+        {$terminalPrefs.fontSize}px
+      </button>
+      <button
+        type="button"
+        class={tbBtn}
+        title={$t('terminal.zoom_in')}
+        aria-label={$t('terminal.zoom_in')}
+        onclick={() => terminalPrefs.zoom(1)}
+      >
+        <Icon name="zoomIn" size={13} />
+      </button>
+      <button
+        type="button"
+        class="{tbBtn} {quickBarOpen ? 'bg-surface-inset text-fg' : ''}"
+        title={$t('terminal.quick_commands')}
+        aria-label={$t('terminal.quick_commands')}
+        aria-pressed={quickBarOpen}
+        onclick={() => (quickBarOpen = !quickBarOpen)}
+      >
+        <Icon name="snippets" size={13} />
+      </button>
+      {#if !session.isLocal}
+        <button
+          type="button"
+          class="{tbBtn} {sftpDrawerOpen ? 'bg-surface-inset text-fg' : ''}"
+          title={$t('terminal.sftp_sidebar')}
+          aria-label={$t('terminal.sftp_sidebar')}
+          aria-pressed={sftpDrawerOpen}
+          onclick={() => (sftpDrawerOpen = !sftpDrawerOpen)}
+        >
+          <Icon name="sidebar" size={13} />
+        </button>
+      {/if}
+      <button
+        type="button"
+        class={tbBtn}
+        title={$t('terminal.find')}
+        aria-label={$t('terminal.find')}
+        onclick={openFind}
+      >
+        <Icon name="search" size={13} />
+      </button>
+    </div>
   </div>
-  {#if findOpen && searchAddon}
-    <TerminalFind bind:this={findBar} search={searchAddon} seed={findSeed} onclose={closeFind} />
-  {/if}
 
-  {#if toast}
+  <!-- Terminal canvas + optional right-hand SFTP sidebar -->
+  <div class="relative flex min-h-0 flex-1 overflow-hidden">
+    <div class="relative min-h-0 min-w-0 flex-1" style="padding: 0.4rem 0.5rem 0.75rem;">
+      <div bind:this={container} class="h-full w-full" class:term-fade={scrolled}></div>
+      {#if findOpen && searchAddon}
+        <TerminalFind bind:this={findBar} search={searchAddon} seed={findSeed} onclose={closeFind} />
+      {/if}
+      {#if toast}
+        <div
+          role="status"
+          class="pointer-events-none absolute bottom-4 right-4 rounded-full bg-surface-raised px-3 py-1.5 text-xs text-fg shadow-soft"
+        >
+          {toast}
+        </div>
+      {/if}
+    </div>
+    {#if sftpDrawerOpen && !session.isLocal}
+      <TerminalSftpDrawer hostName={session.hostName} onClose={() => (sftpDrawerOpen = false)} />
+    {/if}
+  </div>
+
+  <!-- Bottom collapsible quick command bar -->
+  {#if quickBarOpen}
     <div
-      role="status"
-      class="pointer-events-none absolute bottom-6 right-6 rounded-full bg-surface-raised px-3 py-1.5 text-xs text-fg shadow-soft"
+      data-quick-commands
+      class="flex shrink-0 items-center gap-2 border-t border-default bg-surface-raised px-2.5 py-1.5"
     >
-      {toast}
+      <input
+        bind:value={quickFilter}
+        type="text"
+        placeholder={$t('terminal.quick_commands_filter')}
+        aria-label={$t('terminal.quick_commands_filter')}
+        class="w-36 shrink-0 rounded-md border border-default bg-surface-inset px-2 py-1 text-xs text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+      />
+      <div class="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
+        {#if quickSnippets.length === 0}
+          <span class="truncate text-xs text-faint">{$t('terminal.quick_commands_empty')}</span>
+        {:else}
+          {#each quickSnippets as sn (sn.name)}
+            <button
+              type="button"
+              class="shrink-0 rounded-full border border-default bg-surface px-2.5 py-0.5 text-xs text-fg transition hover:border-strong hover:bg-accent hover:text-accent-fg"
+              title={sn.command}
+              onclick={() => sendQuickSnippet(sn)}
+            >
+              {sn.name}
+            </button>
+          {/each}
+        {/if}
+      </div>
     </div>
   {/if}
 </div>
+
+{#if paramPrompt}
+  <Modal label={paramPrompt.snippet.name} onClose={() => (paramPrompt = null)}>
+    <form
+      class="space-y-3 p-5"
+      onsubmit={(e) => {
+        e.preventDefault();
+        submitParamSnippet();
+      }}
+    >
+      <h2 class="text-sm font-semibold">{paramPrompt.snippet.name}</h2>
+      <p class="font-mono text-xs text-muted">{paramPrompt.snippet.command}</p>
+      {#each Object.keys(paramPrompt.values) as key (key)}
+        <div>
+          <label class="mb-1 block text-xs text-muted" for="qc-param-{key}">{key}</label>
+          <input
+            id="qc-param-{key}"
+            bind:value={paramPrompt.values[key]}
+            type="text"
+            class="w-full rounded-xl border border-default bg-surface-inset px-3 py-1.5 text-sm text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          />
+        </div>
+      {/each}
+      <div class="flex justify-end gap-2 pt-2">
+        <button
+          type="button"
+          class="rounded-full px-4 py-1.5 text-sm text-muted hover:bg-surface-inset hover:text-fg"
+          onclick={() => (paramPrompt = null)}
+        >
+          {$t('common.cancel')}
+        </button>
+        <button
+          type="submit"
+          class="rounded-full bg-accent px-4 py-1.5 text-sm font-medium text-accent-fg"
+        >
+          {$t('common.confirm')}
+        </button>
+      </div>
+    </form>
+  </Modal>
+{/if}
 
 {#if menu}
   <div

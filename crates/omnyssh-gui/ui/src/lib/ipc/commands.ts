@@ -7,11 +7,15 @@ import type {
   FileEntryDto,
   HostDto,
   HostInputDto,
+  ImportSummaryDto,
   SnippetDto,
+  SyncConfigDto,
+  SyncConfigInputDto,
   TerminalBytes,
   TraySupportDto,
   UpdateConfigDto,
-  UpdateInfoDto
+  UpdateInfoDto,
+  VaultStatusDto
 } from '$lib/bindings';
 
 export async function listHosts(): Promise<HostDto[]> {
@@ -285,4 +289,120 @@ export async function unlockIdentity(keyPath: string, passphrase: string): Promi
 export async function answerPassword(requestId: number, password: string | null): Promise<void> {
   const res = await commands.answerPassword(requestId, password);
   if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Open a local shell PTY (PowerShell / Bash / Zsh) without an SSH connection. */
+export async function terminalOpenLocal(
+  cols: number,
+  rows: number,
+  onOutput: Channel<TerminalBytes>
+): Promise<number> {
+  const res = await commands.terminalOpenLocal(cols, rows, onOutput);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Read a remote UTF-8 text file in full for inline editing; arrives as `file-content-ready`. */
+export async function sftpReadFile(sessionId: number, path: string): Promise<void> {
+  const res = await commands.sftpReadFile(sessionId, path);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Save edited UTF-8 text back to a remote file; arrives as `sftp-op-done`. */
+export async function sftpWriteFile(sessionId: number, path: string, content: string): Promise<void> {
+  const res = await commands.sftpWriteFile(sessionId, path, content);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Change POSIX permission mode (lower 12 bits, e.g. 0o755) on a remote file or directory. */
+export async function sftpChmod(sessionId: number, path: string, mode: number): Promise<void> {
+  const res = await commands.sftpChmod(sessionId, path, mode);
+  if (res.status === 'error') throw new Error(res.error.message);
+}
+
+/** Save a UTF-8 text file (session log or encrypted backup) to the user's Downloads folder. */
+export async function saveTextFile(fileName: string, content: string): Promise<string> {
+  const res = await commands.saveTextFile(fileName, content);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Query current local encryption vault mode and lock state. */
+export async function vaultStatus(): Promise<VaultStatusDto> {
+  return commands.vaultStatus();
+}
+
+/** Unlock a master-password-protected vault into memory. */
+export async function vaultUnlock(masterPassword: string): Promise<VaultStatusDto> {
+  const res = await commands.vaultUnlock(masterPassword);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Lock a master-password vault in memory. */
+export async function vaultLock(): Promise<VaultStatusDto> {
+  return commands.vaultLock();
+}
+
+/** Enable or change the master password. */
+export async function vaultSetMasterPassword(
+  currentPassword: string | null,
+  newPassword: string
+): Promise<VaultStatusDto> {
+  const res = await commands.vaultSetMasterPassword(currentPassword, newPassword);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Remove the master password and return to seamless local auto-encryption. */
+export async function vaultRemoveMasterPassword(currentPassword: string): Promise<VaultStatusDto> {
+  const res = await commands.vaultRemoveMasterPassword(currentPassword);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Export hosts, snippets, and app config into an E2E encrypted `.korabak` JSON bundle. */
+export async function exportBackup(passphrase: string): Promise<string> {
+  const res = await commands.exportBackup(passphrase);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Decrypt and import an encrypted `.korabak` JSON bundle. */
+export async function importBackup(
+  bundleJson: string,
+  passphrase: string,
+  replace: boolean
+): Promise<ImportSummaryDto> {
+  const res = await commands.importBackup(bundleJson, passphrase, replace);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Load WebDAV / Git sync configuration. */
+export async function loadSyncConfig(): Promise<SyncConfigDto> {
+  const res = await commands.loadSyncConfig();
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Save WebDAV / Git sync configuration. */
+export async function saveSyncConfig(input: SyncConfigInputDto): Promise<SyncConfigDto> {
+  const res = await commands.saveSyncConfig(input);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Encrypt and push current snapshot to the configured WebDAV or Git remote. */
+export async function syncPush(passphrase: string): Promise<string> {
+  const res = await commands.syncPush(passphrase);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
+}
+
+/** Pull and decrypt the latest snapshot from the configured WebDAV or Git remote. */
+export async function syncPull(passphrase: string, replace: boolean): Promise<ImportSummaryDto> {
+  const res = await commands.syncPull(passphrase, replace);
+  if (res.status === 'error') throw new Error(res.error.message);
+  return res.data;
 }

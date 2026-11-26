@@ -1,7 +1,6 @@
-<!-- Content follows the active entity (tech-gui.md §2): exactly one of Dashboard,
-     Snippets, or one session. Terminal and SFTP tabs live in a persistent layer so
-     their scrollback / byte stream (terminal) and pane state (SFTP) survive switching
-     away — only visibility toggles. The list_hosts call feeds the status-bar count. -->
+<!-- Content follows the active entity (tech-gui.md §2): Dashboard, Snippets, Settings,
+     or one (or two split) live terminal/SFTP session(s). All sessions stay mounted in the
+     persistent layer so scrollback, SSH channels, and split toggles never lose state. -->
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listHosts } from '$lib/ipc/commands';
@@ -9,6 +8,7 @@
   import { lastError } from '$lib/stores/notifications';
   import { activeEntity } from '$lib/stores/activeEntity';
   import { sessions } from '$lib/stores/sessions';
+  import { splitLayout } from '$lib/stores/layout';
   import AppShell from '$lib/components/AppShell.svelte';
   import Dashboard from '$lib/screens/Dashboard.svelte';
   import Snippets from '$lib/screens/Snippets.svelte';
@@ -26,22 +26,52 @@
   });
 
   const activeSessionId = $derived($activeEntity.kind === 'session' ? $activeEntity.id : null);
-  // A selector (Dashboard/Snippets) owns the overlay; a session owns the persistent
-  // layer. The two are mutually exclusive — the §2 exactly-one-active invariant.
   const selectorActive = $derived(
     $activeEntity.kind === 'dashboard' ||
       $activeEntity.kind === 'snippets' ||
       $activeEntity.kind === 'settings'
   );
+
+  // Split mode is active when the primary active session is a terminal and a distinct
+  // secondary terminal session exists.
+  const splitActive = $derived.by(() => {
+    if (selectorActive || activeSessionId == null || $splitLayout.direction === 'none') return false;
+    const secId = $splitLayout.secondarySessionId;
+    if (secId == null || secId === activeSessionId) return false;
+    const primary = $sessions.find((s) => s.id === activeSessionId);
+    const secondary = $sessions.find((s) => s.id === secId);
+    return primary?.kind === 'terminal' && secondary?.kind === 'terminal';
+  });
+
+  function terminalPaneClass(id: number): string {
+    if (!splitActive) return 'inset-0';
+    if ($splitLayout.direction === 'horizontal') {
+      return id === activeSessionId
+        ? 'inset-y-0 left-0 right-1/2 border-r border-default'
+        : 'inset-y-0 left-1/2 right-0';
+    }
+    return id === activeSessionId
+      ? 'inset-x-0 top-0 bottom-1/2 border-b border-default'
+      : 'inset-x-0 top-1/2 bottom-0';
+  }
 </script>
 
 <AppShell>
   <div class="relative h-full">
     {#each $sessions as s (s.id)}
       {#if s.kind === 'terminal'}
-        <TerminalView session={s} active={activeSessionId === s.id} />
+        {@const isPrimary = !selectorActive && activeSessionId === s.id}
+        {@const isSecondary = splitActive && $splitLayout.secondarySessionId === s.id}
+        <TerminalView
+          session={s}
+          active={isPrimary || isSecondary}
+          paneClass={terminalPaneClass(s.id)}
+          isSplit={splitActive && (isPrimary || isSecondary)}
+          focused={!splitActive || (isPrimary ? $splitLayout.focusedPane === 'primary' : $splitLayout.focusedPane === 'secondary')}
+          onPaneFocus={() => splitActive && splitLayout.focus(isPrimary ? 'primary' : 'secondary')}
+        />
       {:else}
-        <SftpView session={s} active={activeSessionId === s.id} />
+        <SftpView session={s} active={!selectorActive && activeSessionId === s.id} />
       {/if}
     {/each}
 

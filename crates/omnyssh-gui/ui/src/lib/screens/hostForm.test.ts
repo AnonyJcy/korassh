@@ -17,6 +17,8 @@ function host(partial: Partial<HostDto>): HostDto {
     hasKey: false,
     monitoring: 'ssh',
     localForwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
     tunnelAutostart: false,
     forwardAgent: false,
     ...partial

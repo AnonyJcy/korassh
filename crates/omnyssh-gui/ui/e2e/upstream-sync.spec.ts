@@ -62,7 +62,7 @@ async function boot(page: Page, rootPaths = false): Promise<void> {
           case 'reload_hosts':
             later('hosts-loaded', state.map((h) => ({ ...h })));
             return Promise.resolve(null);
-          case 'list_snippets': return Promise.resolve([]);
+          case 'list_snippets': return Promise.resolve([{ name: '检查磁盘', command: 'df -h', scope: 'global' }]);
           case 'restore_password_auth': {
             const host = state.find((h) => h.name === args.hostName);
             if (host) host.passwordAuthDisabled = false;
@@ -110,6 +110,23 @@ async function boot(page: Page, rootPaths = false): Promise<void> {
             setTimeout(() => callbacks[channel]?.({ message: new TextEncoder().encode('ready> ').buffer, index: 0 }), 0);
             return Promise.resolve(id);
           }
+          case 'terminal_open_local': {
+            const id = ++sessionId;
+            const channel = (args.onOutput as { id: number }).id;
+            setTimeout(() => callbacks[channel]?.({ message: new TextEncoder().encode('local$ ').buffer, index: 0 }), 0);
+            return Promise.resolve(id);
+          }
+          case 'sftp_read_file':
+            later('file-content-ready', { sessionId: args.sessionId, path: args.path, content: 'port: 8080\n', error: null });
+            return Promise.resolve(null);
+          case 'sftp_write_file':
+          case 'sftp_chmod':
+            later('sftp-op-done', { sessionId: args.sessionId, ok: true });
+            return Promise.resolve(null);
+          case 'vault_status':
+            return Promise.resolve({ mode: 'auto', unlocked: true });
+          case 'save_text_file':
+            return Promise.resolve(`/tmp/${args.fileName as string}`);
           case 'plugin:event|listen': {
             const { event, handler } = args as { event: string; handler: number };
             (listeners[event] ||= []).push(handler);
@@ -559,4 +576,86 @@ test('仪表盘在存在失败主机时按 F5 立即重载重连，全部在线�
   await fire(page, 'host-status-changed', { hostName: 'web-1', status: { kind: 'failed', reason: 'timeout' } });
   await page.keyboard.press('Control+r');
   await expect.poll(() => (calls(page, 'reload_hosts').then((c) => c.length))).toBe(initialReloads + 1);
+});
+
+test('终端支持字号缩放、快捷命令条、分屏、SFTP侧边栏、会话日志录制与本地终端标签', async ({ page }) => {
+  await boot(page);
+  // Open local shell directly from sidebar
+  await page.getByRole('button', { name: '本地终端', exact: true }).click();
+  await expect(page.locator('.xterm-rows')).toContainText('local$');
+  await expect.poll(() => calls(page, 'terminal_open_local')).toHaveLength(1);
+
+  // Switch back to dashboard and open SSH terminal
+  await page.getByRole('button', { name: '仪表盘', exact: true }).click();
+  await page.getByTitle('终端 (web-1)', { exact: true }).click();
+  await expect(page.locator('.xterm-rows').last()).toContainText('ready>');
+
+  // Zoom in (getByRole filters to visible elements; the background local shell is hidden)
+  await page.getByRole('button', { name: '放大字号 (Ctrl +)', exact: true }).click();
+  await expect(page.getByRole('button', { name: '14px', exact: true })).toBeVisible();
+
+  // Quick command bar toggle + click snippet
+  await page.getByRole('button', { name: '快捷命令条', exact: true }).click();
+  await expect(page.getByRole('button', { name: '检查磁盘', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '检查磁盘', exact: true }).click();
+  await expect.poll(() => calls(page, 'terminal_write')).toHaveLength(1);
+
+  // SFTP drawer inside terminal
+  await page.getByRole('button', { name: '切换 SFTP 侧边栏', exact: true }).click();
+  await expect(page.getByLabel('文件 · web-1', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '切换 SFTP 侧边栏', exact: true }).click();
+
+  // Horizontal split opens second live terminal pane
+  await page.getByRole('button', { name: '左右分屏', exact: true }).click();
+  await expect.poll(() => calls(page, 'terminal_open')).toHaveLength(2);
+  await page.getByRole('button', { name: '取消分屏', exact: true }).first().click();
+
+  // Record & save session log
+  await page.getByRole('button', { name: '开始录制会话日志', exact: true }).click();
+  await expect(page.getByText('录制中', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '停止录制并保存日志', exact: true }).click();
+  await expect.poll(() => calls(page, 'save_text_file')).toHaveLength(1);
+});
+
+test('SFTP 支持在线编辑远程文本文件、筛选过滤、隐藏文件开关与修改权限 chmod', async ({ page }) => {
+  await boot(page);
+  await page.getByTitle('SFTP (web-1)', { exact: true }).click();
+  const remote = page.locator('[data-pane="remote"]');
+  await expect(remote.getByText('config.yml', { exact: true })).toBeVisible();
+
+  // Filter files
+  const filter = remote.getByPlaceholder('筛选当前目录文件…');
+  await filter.fill('config');
+  await expect(remote.getByText('config.yml', { exact: true })).toBeVisible();
+  await expect(remote.getByText('var', { exact: true })).toHaveCount(0);
+  await filter.fill('');
+
+  // Inline remote text file editor
+  await remote.getByLabel('在线编辑', { exact: true }).first().click();
+  const dialog = page.getByRole('dialog', { name: '编辑远程文本文件' });
+  await expect(dialog).toBeVisible();
+  const area = dialog.locator('textarea');
+  await expect(area).toHaveValue('port: 8080\n');
+  await area.fill('port: 9090\n');
+  await dialog.getByRole('button', { name: '保存 (Ctrl+S)', exact: true }).click();
+  await expect.poll(() => calls(page, 'sftp_write_file')).toHaveLength(1);
+
+  // Chmod modal
+  await remote.getByLabel('修改权限', { exact: true }).first().click();
+  const chmodDialog = page.getByRole('dialog', { name: '修改文件权限 (chmod)' });
+  await expect(chmodDialog).toBeVisible();
+  await chmodDialog.locator('input').fill('0755');
+  await chmodDialog.getByRole('button', { name: '应用权限', exact: true }).click();
+  await expect.poll(() => calls(page, 'sftp_chmod')).toHaveLength(1);
+});
+
+test('设置页包含终端配色、凭据加密库、加密备份同步与开源衍生致谢说明', async ({ page }) => {
+  await boot(page);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '终端体验', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Dracula', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '凭据加密库', exact: true })).toBeVisible();
+  await expect(page.getByText('自动加密保护（已解锁）', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '端到端加密备份与同步', exact: true })).toBeVisible();
+  await expect(page.getByText('最初衍生自 OmnySSH (Apache-2.0)，现已独立演进维护。', { exact: true })).toBeVisible();
 });

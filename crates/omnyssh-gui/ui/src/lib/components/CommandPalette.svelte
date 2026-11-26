@@ -11,7 +11,7 @@
   import { statuses } from '$lib/stores/statuses';
   import { sessions, sessionLabel, sessionStatusDot } from '$lib/stores/sessions';
   import { activeEntity } from '$lib/stores/activeEntity';
-  import { spawnSession } from '$lib/stores/navigation';
+  import { spawnSession, spawnLocalSession } from '$lib/stores/navigation';
   import { streamerMode, displayHostname, displayUser, displayHostTitle } from '$lib/stores/streamer';
   import { isPaletteChord, streamerChordLabel } from '$lib/stores/ui';
   import { locale, t } from '$lib/i18n';
@@ -84,7 +84,8 @@
       activeEntity.activateSession(item.session.id);
       palette.close();
     } else if (item.kind === 'command') {
-      streamerMode.toggle();
+      if (item.id === 'toggle-streamer') streamerMode.toggle();
+      else if (item.id === 'new-local-shell') spawnLocalSession($t('sidebar.local_shell'));
       palette.close();
     } else if ($palette.mode === 'pickHost') {
       palette.choose(item.host);
@@ -207,11 +208,16 @@
                   <Icon name={item.session.kind} size={16} />
                   <span class="min-w-0 flex-1 truncate">{displayHostTitle(sessionLabel(item.session), $streamerMode)}</span>
                 {:else if item.kind === 'command'}
-                  <Icon name="eye" size={16} />
-                  <span class="min-w-0 flex-1 truncate">{$t('palette.toggle_streamer')}</span>
-                  <span class="shrink-0 font-mono text-xs {selected === i ? '' : 'text-faint'}">
-                    {streamerChordLabel}
-                  </span>
+                  {#if item.id === 'toggle-streamer'}
+                    <Icon name="eye" size={16} />
+                    <span class="min-w-0 flex-1 truncate">{$t('palette.toggle_streamer')}</span>
+                    <span class="shrink-0 font-mono text-xs {selected === i ? '' : 'text-faint'}">
+                      {streamerChordLabel}
+                    </span>
+                  {:else}
+                    <Icon name="desktop" size={16} />
+                    <span class="min-w-0 flex-1 truncate">{$t('palette.new_local_shell')}</span>
+                  {/if}
                 {:else}
                   <StatusDot status={hostStatusDot($statuses.get(item.host.name))} />
                   <span class="min-w-0 flex-1 truncate font-medium">{displayHostTitle(item.host.name, $streamerMode, item.host.hostname)}</span>

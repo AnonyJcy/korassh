@@ -16,7 +16,7 @@
     type SessionKind
   } from '$lib/stores/sessions';
   import { sidebarCollapsed } from '$lib/stores/ui';
-  import { spawnSession, closeSession } from '$lib/stores/navigation';
+  import { spawnSession, spawnLocalSession, closeSession } from '$lib/stores/navigation';
   import { palette } from '$lib/stores/palette';
   import { support } from '$lib/stores/support';
   import { streamerMode, displayHostTitle } from '$lib/stores/streamer';
@@ -101,6 +101,17 @@
           </button>
         </li>
       {/each}
+      <li>
+        <button
+          type="button"
+          class="{rowBase} {focusRing} {rowState(false)} {$sidebarCollapsed ? 'justify-center' : ''}"
+          title={$t('sidebar.local_shell')}
+          onclick={() => spawnLocalSession($t('sidebar.local_shell'))}
+        >
+          <Icon name="desktop" />
+          {#if !$sidebarCollapsed}<span class="truncate">{$t('sidebar.local_shell')}</span>{/if}
+        </button>
+      </li>
     </ul>
 
     {#if $sessions.length > 0}

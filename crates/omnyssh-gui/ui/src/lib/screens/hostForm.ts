@@ -3,7 +3,15 @@
 // validation mirrors the TUI's `HostForm::to_host` (crates/omnyssh/src/app/host.rs)
 // so both frontends produce the same `hosts.toml` shape and error messages.
 
-import type { HostDto, HostInputDto, LocalForwardDto, MonitorModeDto } from '$lib/bindings';
+import type {
+  DynamicForwardDto,
+  HostDto,
+  HostInputDto,
+  LocalForwardDto,
+  MonitorModeDto,
+  ProxyKindDto,
+  RemoteForwardDto
+} from '$lib/bindings';
 
 /** One port-forward row as typed: listen on `[address:]port` here, reach
  *  `remoteHost:remotePort` from the host. */
@@ -11,6 +19,16 @@ export interface ForwardRow {
   local: string;
   remoteHost: string;
   remotePort: string;
+}
+
+export interface RemoteForwardRow {
+  remote: string;
+  localHost: string;
+  localPort: string;
+}
+
+export interface DynamicForwardRow {
+  listen: string;
 }
 
 /** The editable form fields — all raw text (tags are comma-separated, port a string). */
@@ -27,6 +45,14 @@ export interface HostFormFields {
   /** Probe port; blank means "the host's SSH port". Only read for `tcpPort`. */
   monitorPort: string;
   forwards: ForwardRow[];
+  remoteForwards?: RemoteForwardRow[];
+  dynamicForwards?: DynamicForwardRow[];
+  proxyKind?: 'none' | ProxyKindDto;
+  proxyHost?: string;
+  proxyPort?: string;
+  proxyUser?: string;
+  proxyPassword?: string;
+  proxyHasAuth?: boolean;
   tunnelAutostart: boolean;
   forwardAgent: boolean;
 }
@@ -46,6 +72,14 @@ export function emptyForm(): HostFormFields {
     monitoring: 'ssh',
     monitorPort: '',
     forwards: [],
+    remoteForwards: [],
+    dynamicForwards: [],
+    proxyKind: 'none',
+    proxyHost: '',
+    proxyPort: '',
+    proxyUser: '',
+    proxyPassword: '',
+    proxyHasAuth: false,
     tunnelAutostart: false,
     forwardAgent: false
   };
@@ -53,6 +87,14 @@ export function emptyForm(): HostFormFields {
 
 export function emptyForwardRow(): ForwardRow {
   return { local: '', remoteHost: 'localhost', remotePort: '' };
+}
+
+export function emptyRemoteForwardRow(): RemoteForwardRow {
+  return { remote: '', localHost: '127.0.0.1', localPort: '' };
+}
+
+export function emptyDynamicForwardRow(): DynamicForwardRow {
+  return { listen: '' };
 }
 
 /** An IPv6 address needs brackets to survive the colon-separated notation. */
@@ -63,6 +105,20 @@ function rowFromForward(f: LocalForwardDto): ForwardRow {
     local: f.bindAddress == null ? String(f.bindPort) : `${bracketed(f.bindAddress)}:${f.bindPort}`,
     remoteHost: f.remoteHost,
     remotePort: String(f.remotePort)
+  };
+}
+
+function rowFromRemoteForward(f: RemoteForwardDto): RemoteForwardRow {
+  return {
+    remote: f.bindAddress == null ? String(f.remotePort) : `${bracketed(f.bindAddress)}:${f.remotePort}`,
+    localHost: f.localHost,
+    localPort: String(f.localPort)
+  };
+}
+
+function rowFromDynamicForward(f: DynamicForwardDto): DynamicForwardRow {
+  return {
+    listen: f.bindAddress == null ? String(f.bindPort) : `${bracketed(f.bindAddress)}:${f.bindPort}`
   };
 }
 
@@ -82,6 +138,14 @@ export function formFromHost(h: HostDto): HostFormFields {
     monitoring: h.monitoring,
     monitorPort: h.monitorPort == null ? '' : String(h.monitorPort),
     forwards: h.localForwards.map(rowFromForward),
+    remoteForwards: (h.remoteForwards ?? []).map(rowFromRemoteForward),
+    dynamicForwards: (h.dynamicForwards ?? []).map(rowFromDynamicForward),
+    proxyKind: h.proxy ? h.proxy.kind : 'none',
+    proxyHost: h.proxy?.host ?? '',
+    proxyPort: h.proxy ? String(h.proxy.port) : '',
+    proxyUser: h.proxy?.username ?? '',
+    proxyPassword: '',
+    proxyHasAuth: h.proxy?.hasAuth ?? false,
     tunnelAutostart: h.tunnelAutostart,
     forwardAgent: h.forwardAgent
   };
@@ -187,6 +251,60 @@ export function formToInput(f: HostFormFields): HostFormResult {
   const localForwards = parseForwards(f.forwards);
   if (typeof localForwards === 'string') return { ok: false, error: localForwards };
 
+  const remoteForwards: RemoteForwardDto[] = [];
+  for (const [i, row] of (f.remoteForwards ?? []).entries()) {
+    if (!row.remote.trim() && !row.localPort.trim()) continue;
+    const listen = parseListen(row.remote);
+    if (typeof listen === 'string') return { ok: false, error: `Remote forward ${i + 1}: ${listen}` };
+    const localHost = row.localHost.trim().replace(/^\[(.*)\]$/, '$1') || '127.0.0.1';
+    if (/[\s[\]]/.test(localHost)) {
+      return { ok: false, error: `Remote forward ${i + 1}: invalid local host '${localHost}'` };
+    }
+    const localPort = parsePort(row.localPort);
+    if (localPort == null) {
+      return {
+        ok: false,
+        error: `Remote forward ${i + 1}: local port must be 1–65535, got '${row.localPort.trim()}'`
+      };
+    }
+    remoteForwards.push({
+      bindAddress: listen.bindAddress,
+      remotePort: listen.bindPort,
+      localHost,
+      localPort
+    });
+  }
+
+  const dynamicForwards: DynamicForwardDto[] = [];
+  for (const [i, row] of (f.dynamicForwards ?? []).entries()) {
+    if (!row.listen.trim()) continue;
+    const listen = parseListen(row.listen);
+    if (typeof listen === 'string') return { ok: false, error: `Dynamic forward ${i + 1}: ${listen}` };
+    dynamicForwards.push(listen);
+  }
+
+  let proxy: HostInputDto['proxy'];
+  if (f.proxyKind && f.proxyKind !== 'none') {
+    const pHost = (f.proxyHost ?? '').trim();
+    const pPort = parsePort(f.proxyPort ?? '');
+    if (!pHost) return { ok: false, error: 'Proxy host cannot be empty' };
+    if (pPort == null) {
+      return { ok: false, error: `Proxy port must be 1–65535, got '${(f.proxyPort ?? '').trim()}'` };
+    }
+    const pUser = (f.proxyUser ?? '').trim();
+    const pPass = f.proxyPassword ?? '';
+    proxy = {
+      kind: f.proxyKind,
+      host: pHost,
+      port: pPort,
+      username: pUser || undefined,
+      password: pPass || undefined
+    };
+  }
+
+  const hasAnyForwards =
+    localForwards.length > 0 || remoteForwards.length > 0 || dynamicForwards.length > 0;
+
   const identityFile = f.identityFile.trim();
   const password = f.password.trim();
   const notes = f.notes.trim();
@@ -205,8 +323,11 @@ export function formToInput(f: HostFormFields): HostFormResult {
       monitoring: f.monitoring,
       monitorPort,
       localForwards,
+      ...(remoteForwards.length > 0 ? { remoteForwards } : {}),
+      ...(dynamicForwards.length > 0 ? { dynamicForwards } : {}),
+      ...(proxy ? { proxy } : {}),
       // The switch hides with the last row; a flag nobody can see must not linger.
-      tunnelAutostart: f.tunnelAutostart && localForwards.length > 0,
+      tunnelAutostart: f.tunnelAutostart && hasAnyForwards,
       forwardAgent: f.forwardAgent
     }
   };

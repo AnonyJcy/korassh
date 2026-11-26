@@ -5,6 +5,8 @@
   import { reloadHosts, refreshMetrics, setTrayBehavior } from '$lib/ipc/commands';
   import { theme } from '$lib/stores/theme';
   import { fontPrefs } from '$lib/stores/font';
+  import { terminalPrefs } from '$lib/stores/terminalPrefs';
+  import { refreshVaultStatus } from '$lib/stores/vault';
   import { sidebarCollapsed } from '$lib/stores/ui';
   import { streamerMode } from '$lib/stores/streamer';
   import { refreshInterval, driveMetricsRefresh } from '$lib/stores/settings';
@@ -25,6 +27,8 @@
     // the synchronous localStorage mirrors already seeded the first paint (§5.1, §2).
     void theme.hydrate();
     void fontPrefs.hydrate();
+    void terminalPrefs.hydrate();
+    void refreshVaultStatus();
     void sidebarCollapsed.hydrate();
     void streamerMode.hydrate();
     void refreshInterval.hydrate();

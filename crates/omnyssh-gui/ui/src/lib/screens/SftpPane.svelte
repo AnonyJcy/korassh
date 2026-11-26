@@ -11,6 +11,7 @@
   import { Icon, type IconName } from '$lib/theme';
   import type { FileEntryDto } from '$lib/bindings';
   import { formatBytes, formatDate, type Pane, type PaneSide } from '$lib/stores/sftp';
+  import { formatPermissions, formatOctalMode } from '$lib/stores/vault';
   import { maskText } from '$lib/stores/streamer';
   import { t } from '$lib/i18n';
 
@@ -32,6 +33,8 @@
     onNavigatePath,
     onToggleMark,
     onPreview,
+    onEdit,
+    onChmod,
     onDragStart,
     toolbar
   }: {
@@ -48,6 +51,8 @@
     onNavigatePath?: (path: string) => void;
     onToggleMark: (path: string) => void;
     onPreview: (entry: FileEntryDto) => void;
+    onEdit?: (entry: FileEntryDto) => void;
+    onChmod?: (entry: FileEntryDto) => void;
     onDragStart?: (entry: FileEntryDto, event: PointerEvent) => void;
     toolbar?: Snippet;
   } = $props();
@@ -55,6 +60,8 @@
   let isEditing = $state(false);
   let editValue = $state('');
   let pathInput = $state<HTMLInputElement>();
+  let filterQuery = $state('');
+  let showHidden = $state(false);
 
   let hideLnk = $state(
     typeof window !== 'undefined'
@@ -82,10 +89,14 @@
   );
 
   const visibleEntries = $derived.by(() => {
-    if (isWin && hideLnk) {
-      return pane.entries.filter((e) => e.name === '..' || e.isDir || !e.name.toLowerCase().endsWith('.lnk'));
-    }
-    return pane.entries;
+    const q = filterQuery.trim().toLowerCase();
+    return pane.entries.filter((e) => {
+      if (e.name === '..') return true;
+      if (!showHidden && e.name.startsWith('.')) return false;
+      if (isWin && hideLnk && !e.isDir && e.name.toLowerCase().endsWith('.lnk')) return false;
+      if (q && !e.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
   });
 
   function startEditing(): void {
@@ -142,6 +153,18 @@
         {title}
       </h2>
       <div class="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          class="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus {showHidden
+            ? 'border-accent bg-surface-inset text-fg'
+            : 'border-default text-muted hover:border-strong hover:bg-surface-inset hover:text-fg'}"
+          title={showHidden ? $t('sftp.hide_hidden') : $t('sftp.show_hidden')}
+          aria-pressed={showHidden}
+          onclick={() => (showHidden = !showHidden)}
+        >
+          <Icon name={showHidden ? 'eye' : 'eyeOff'} size={13} />
+          <span>.*</span>
+        </button>
         {#if isWin}
           <button
             type="button"
@@ -232,6 +255,32 @@
       </div>
     {/if}
 
+    <!-- Filter box -->
+    <div class="mt-2 flex items-center gap-1.5">
+      <div class="relative flex min-w-0 flex-1 items-center">
+        <span class="pointer-events-none absolute left-2.5 text-faint">
+          <Icon name="search" size={12} />
+        </span>
+        <input
+          bind:value={filterQuery}
+          type="text"
+          placeholder={$t('sftp.filter_placeholder')}
+          aria-label={$t('sftp.filter_placeholder')}
+          class="w-full rounded-md border border-default bg-surface-inset py-1 pl-7 pr-6 text-xs text-fg placeholder:text-faint focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-focus"
+        />
+        {#if filterQuery}
+          <button
+            type="button"
+            class="absolute right-1.5 text-faint hover:text-fg"
+            aria-label={$t('common.close')}
+            onclick={() => (filterQuery = '')}
+          >
+            <Icon name="close" size={11} />
+          </button>
+        {/if}
+      </div>
+    </div>
+
     <!-- Quick Access Location Buttons -->
     {#if shortcuts.length > 0}
       <div class="mt-2 flex flex-wrap items-center gap-1.5">
@@ -272,6 +321,7 @@
         aria-hidden="true"
       >
         <span class="min-w-0 flex-1 pl-[1.4rem]">{$t('sftp.column_name')}</span>
+        <span class="hidden w-20 shrink-0 text-right font-mono xl:inline">{$t('sftp.column_perms')}</span>
         <span class="shrink-0">{$t('sftp.column_size')}</span>
         <span class={modifiedCol}>{$t('sftp.column_modified')}</span>
       </div>
@@ -281,7 +331,7 @@
           {@const marked = pane.marked.has(entry.path)}
           {@const dropHere = dropActive && entry.isDir && dropDir === entry.path}
           <li
-            class="flex items-center gap-1.5 rounded {dropHere ? 'ring-2 ring-accent' : ''}"
+            class="group/row flex items-center gap-1.5 rounded {dropHere ? 'ring-2 ring-accent' : ''}"
             data-dir-path={entry.isDir ? entry.path : undefined}
           >
             {#if isParent}
@@ -311,6 +361,14 @@
               <span class="min-w-0 flex-1 truncate {entry.isDir ? 'font-medium text-fg' : ''}">
                 {entry.name}
               </span>
+              {#if !isParent && entry.permissions != null}
+                <span
+                  class="hidden w-20 shrink-0 text-right font-mono text-[11px] text-faint xl:inline"
+                  title={formatOctalMode(entry.permissions)}
+                >
+                  {formatPermissions(entry.permissions)}
+                </span>
+              {/if}
               {#if !entry.isDir}
                 <span class="shrink-0 tabular-nums text-xs text-faint">{formatBytes(entry.size)}</span>
               {/if}
@@ -323,6 +381,32 @@
                 </span>
               {/if}
             </button>
+            {#if !isParent && side === 'remote'}
+              <div class="flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover/row:opacity-100 focus-within:opacity-100">
+                {#if !entry.isDir && onEdit}
+                  <button
+                    type="button"
+                    class="grid h-6 w-6 place-items-center rounded text-muted transition hover:bg-surface-inset hover:text-fg"
+                    title={$t('sftp.edit_file')}
+                    aria-label={$t('sftp.edit_file')}
+                    onclick={() => onEdit(entry)}
+                  >
+                    <Icon name="edit" size={12} />
+                  </button>
+                {/if}
+                {#if onChmod}
+                  <button
+                    type="button"
+                    class="grid h-6 w-6 place-items-center rounded text-muted transition hover:bg-surface-inset hover:text-fg"
+                    title={$t('sftp.chmod')}
+                    aria-label={$t('sftp.chmod')}
+                    onclick={() => onChmod(entry)}
+                  >
+                    <Icon name="shield" size={12} />
+                  </button>
+                {/if}
+              </div>
+            {/if}
           </li>
         {/each}
       </ul>

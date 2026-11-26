@@ -8,7 +8,7 @@ import type { FileEntryDto, TransferProgressDto } from '$lib/bindings';
 
 export type PaneSide = 'local' | 'remote';
 type SftpStatus = 'connecting' | 'connected' | 'failed';
-type OpKind = 'upload' | 'download' | 'mkdir' | 'rename' | 'delete';
+type OpKind = 'upload' | 'download' | 'mkdir' | 'rename' | 'delete' | 'write' | 'chmod';
 
 /** One side's browsing state: current directory, its entries, and the marked set. */
 export interface Pane {
@@ -34,6 +34,14 @@ interface Preview {
   content: string;
 }
 
+/** Inline remote text file editor state for one SFTP session. */
+export interface FileEditorState {
+  path: string;
+  loading: boolean;
+  content: string;
+  error?: string;
+}
+
 /** The `sftp-op-done` error of a cancelled transfer, in the core's words. */
 export const CANCELLED = 'Transfer cancelled';
 
@@ -55,6 +63,7 @@ export interface SftpSession {
   pending: PendingOp[];
   transfer?: Transfer;
   preview?: Preview;
+  editor?: FileEditorState;
   /** The last operation error, surfaced in the UI until the next successful action. */
   error?: string;
   /** Pane(s) to re-list once `pending` drains (a mutation changed the FS); the
@@ -297,6 +306,26 @@ function createSftp() {
     },
     clearPreview(id: number): void {
       mut(id, (s) => ({ ...s, preview: undefined }));
+    },
+    beginEdit(id: number, path: string): void {
+      mut(id, (s) => ({ ...s, editor: { path, loading: true, content: '' } }));
+    },
+    setEditorContent(id: number, path: string, content: string | null, error: string | null): void {
+      mut(id, (s) => {
+        if (!s.editor || s.editor.path !== path) return s;
+        return {
+          ...s,
+          editor: {
+            path,
+            loading: false,
+            content: content ?? '',
+            error: error ?? undefined
+          }
+        };
+      });
+    },
+    clearEditor(id: number): void {
+      mut(id, (s) => ({ ...s, editor: undefined }));
     },
     clearRefresh(id: number): void {
       mut(id, (s) => ({ ...s, refresh: undefined }));
